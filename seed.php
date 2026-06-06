@@ -13,6 +13,7 @@ if (isset($_POST['seed'])) {
         $pdo->exec("TRUNCATE TABLE `requests`;");
         $pdo->exec("TRUNCATE TABLE `donations`;");
         $pdo->exec("TRUNCATE TABLE `users`;");
+        $pdo->exec("TRUNCATE TABLE `cms_pages`;");
         $pdo->exec("SET FOREIGN_KEY_CHECKS = 1;");
 
         // 2. Insert test users
@@ -98,6 +99,27 @@ if (isset($_POST['seed'])) {
         
         // Update the fruit donation status to 'requested'
         $pdo->exec("UPDATE donations SET status = 'requested' WHERE id = " . $don3_id);
+
+        // 5. Seed default CMS pages for frontend sections
+        $cmsStmt = $pdo->prepare("INSERT INTO cms_pages (slug, title, content, meta_description, is_active) VALUES (?, ?, ?, ?, 1)");
+        $cmsStmt->execute([
+            'home',
+            'Welcome to Sayog',
+            '<p>Sayog connects donors and communities by making food donation listings available to those who need them most.</p>',
+            'Sayog public portal for food donation and community support.'
+        ]);
+        $cmsStmt->execute([
+            'about',
+            'About Sayog',
+            '<p>Sayog is a community-driven food donation platform that helps surplus food reach people in need through trusted local partners and donors.</p>',
+            'Learn about Sayog and how our food donation network works.'
+        ]);
+        $cmsStmt->execute([
+            'contact',
+            'Contact Sayog',
+            '<p>If you have questions or want to become a donor, reach out to us at <strong>info@sayog.local</strong> or through our community support channels.</p>',
+            'Contact Sayog, find support, and join our donation network.'
+        ]);
 
         $pdo->commit();
         $message = "Database seeded successfully! You can now log in with the test accounts.";

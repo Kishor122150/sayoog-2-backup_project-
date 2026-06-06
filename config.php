@@ -7,6 +7,12 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
+// Upload storage path
+define('UPLOADS_DIR', __DIR__ . '/uploads');
+if (!is_dir(UPLOADS_DIR)) {
+    mkdir(UPLOADS_DIR, 0755, true);
+}
+
 // Database Credentials
 define('DB_HOST', 'localhost');
 define('DB_USER', 'root');
@@ -34,10 +40,17 @@ try {
             `address` VARCHAR(255) NOT NULL,
             `phone` VARCHAR(20) NOT NULL,
             `password` VARCHAR(255) NOT NULL,
+            `role` VARCHAR(30) NOT NULL DEFAULT 'user',
             `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     ";
     $pdo->exec($createUsersTable);
+
+    $columnCheck = $pdo->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = ?");
+    $columnCheck->execute(['role']);
+    if (!$columnCheck->fetchColumn()) {
+        $pdo->exec("ALTER TABLE users ADD COLUMN role VARCHAR(30) NOT NULL DEFAULT 'user'");
+    }
 
     $createDonationsTable = "
         CREATE TABLE IF NOT EXISTS `donations` (
@@ -56,6 +69,17 @@ try {
     ";
     $pdo->exec($createDonationsTable);
 
+    $columnCheck = $pdo->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'donations' AND COLUMN_NAME = ?");
+    $columnCheck->execute(['image_path']);
+    if (!$columnCheck->fetchColumn()) {
+        $pdo->exec("ALTER TABLE donations ADD COLUMN image_path VARCHAR(255) DEFAULT NULL");
+    }
+
+    $columnCheck->execute(['video_path']);
+    if (!$columnCheck->fetchColumn()) {
+        $pdo->exec("ALTER TABLE donations ADD COLUMN video_path VARCHAR(255) DEFAULT NULL");
+    }
+
     $createRequestsTable = "
         CREATE TABLE IF NOT EXISTS `requests` (
             `id` INT AUTO_INCREMENT PRIMARY KEY,
@@ -70,6 +94,58 @@ try {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     ";
     $pdo->exec($createRequestsTable);
+
+    $createNotificationsTable = "
+        CREATE TABLE IF NOT EXISTS `notifications` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `user_id` INT NOT NULL,
+            `type` VARCHAR(50) NOT NULL,
+            `message` TEXT NOT NULL,
+            `link` VARCHAR(255) DEFAULT NULL,
+            `is_read` TINYINT(1) DEFAULT 0,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    ";
+    $pdo->exec($createNotificationsTable);
+
+    $createProductsTable = "
+        CREATE TABLE IF NOT EXISTS `products` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `title` VARCHAR(150) NOT NULL,
+            `slug` VARCHAR(150) NOT NULL UNIQUE,
+            `description` TEXT NOT NULL,
+            `price` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+            `image_path` VARCHAR(255) DEFAULT NULL,
+            `status` ENUM('active','inactive') NOT NULL DEFAULT 'active',
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    ";
+    $pdo->exec($createProductsTable);
+
+    $createCmsPagesTable = "
+        CREATE TABLE IF NOT EXISTS `cms_pages` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `slug` VARCHAR(100) NOT NULL UNIQUE,
+            `title` VARCHAR(150) NOT NULL,
+            `content` TEXT NOT NULL,
+            `meta_description` VARCHAR(255) DEFAULT NULL,
+            `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    ";
+    $pdo->exec($createCmsPagesTable);
+
+    $createAdminKeysTable = "
+        CREATE TABLE IF NOT EXISTS `admin_keys` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `name` VARCHAR(100) NOT NULL,
+            `token_hash` VARCHAR(255) NOT NULL,
+            `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    ";
+    $pdo->exec($createAdminKeysTable);
 
 } catch (PDOException $e) {
     die("Database Connection failed: " . $e->getMessage());
@@ -134,6 +210,103 @@ function get_flash_message() {
  */
 function is_logged_in() {
     return isset($_SESSION['user_id']);
+}
+
+/**
+ * Send notification record and optionally attempt email delivery.
+ */
+function create_notification($pdo, $user_id, $type, $message, $link = null, $sendEmail = false) {
+    try {
+        $stmt = $pdo->prepare("INSERT INTO notifications (user_id, type, message, link) VALUES (?, ?, ?, ?)");
+        $stmt->execute([$user_id, $type, $message, $link]);
+
+        if ($sendEmail) {
+            $emailStmt = $pdo->prepare("SELECT email FROM users WHERE id = ?");
+            $emailStmt->execute([$user_id]);
+            $user = $emailStmt->fetch();
+            if ($user && filter_var($user['email'], FILTER_VALIDATE_EMAIL)) {
+                $subject = "Sayog Notification: " . ucfirst(str_replace('_', ' ', $type));
+                $body = $message;
+                if ($link) {
+                    $body .= "\n\nView details: " . $link;
+                }
+                $headers = "From: no-reply@sayog.local" . "\r\n" .
+                    "Content-Type: text/plain; charset=UTF-8";
+                @mail($user['email'], $subject, $body, $headers);
+            }
+        }
+    } catch (PDOException $e) {
+        // ignore notification failure to avoid breaking user flow
+    }
+}
+
+function get_unread_notifications_count($pdo, $user_id) {
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+    return (int) $stmt->fetchColumn();
+}
+
+function get_user_notifications($pdo, $user_id) {
+    $stmt = $pdo->prepare("SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50");
+    $stmt->execute([$user_id]);
+    return $stmt->fetchAll();
+}
+
+function mark_all_notifications_read($pdo, $user_id) {
+    $stmt = $pdo->prepare("UPDATE notifications SET is_read = 1 WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+}
+
+function is_admin() {
+    return isset($_SESSION['user_role']) && $_SESSION['user_role'] === 'admin';
+}
+
+function is_admin_logged_in() {
+    return !empty($_SESSION['admin_logged_in']);
+}
+
+function verify_admin_key($pdo, $admin_key) {
+    $stmt = $pdo->prepare("SELECT * FROM admin_keys WHERE is_active = 1");
+    $stmt->execute();
+    while ($row = $stmt->fetch()) {
+        if (password_verify($admin_key, $row['token_hash'])) {
+            return $row;
+        }
+    }
+    return false;
+}
+
+function get_active_products($pdo) {
+    $stmt = $pdo->prepare("SELECT * FROM products WHERE status = 'active' ORDER BY created_at DESC");
+    $stmt->execute();
+    return $stmt->fetchAll();
+}
+
+function get_donation_by_id($pdo, $donation_id) {
+    $stmt = $pdo->prepare("SELECT d.*, u.name AS donor_name, u.address AS donor_address, u.phone AS donor_phone FROM donations d JOIN users u ON d.donor_id = u.id WHERE d.id = ? AND d.status IN ('available','requested')");
+    $stmt->execute([$donation_id]);
+    return $stmt->fetch();
+}
+
+/**
+ * Get available donation listings (food donations)
+ */
+function get_available_donations($pdo) {
+    $stmt = $pdo->prepare("SELECT d.*, u.name AS donor_name FROM donations d JOIN users u ON d.donor_id = u.id WHERE d.status = 'available' ORDER BY d.created_at DESC");
+    $stmt->execute();
+    return $stmt->fetchAll();
+}
+
+function get_product_by_slug($pdo, $slug) {
+    $stmt = $pdo->prepare("SELECT * FROM products WHERE slug = ? AND status = 'active'");
+    $stmt->execute([$slug]);
+    return $stmt->fetch();
+}
+
+function get_cms_page_by_slug($pdo, $slug) {
+    $stmt = $pdo->prepare("SELECT * FROM cms_pages WHERE slug = ? AND is_active = 1");
+    $stmt->execute([$slug]);
+    return $stmt->fetch();
 }
 
 /**

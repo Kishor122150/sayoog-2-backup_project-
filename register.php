@@ -65,8 +65,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (empty($errors)) {
         try {
             $password_hash = password_hash($password, PASSWORD_BCRYPT);
-            $stmt = $pdo->prepare("INSERT INTO users (name, email, address, phone, password) VALUES (?, ?, ?, ?, ?)");
-            $stmt->execute([$name, $email, $address, $phone, $password_hash]);
+            $stmt = $pdo->prepare("INSERT INTO users (name, email, address, phone, password, role) VALUES (?, ?, ?, ?, ?, ?)");
+            $stmt->execute([$name, $email, $address, $phone, $password_hash, 'user']);
             
             // Set success flash message and redirect
             set_flash_message('success', 'Registration successful! You can now log in.');
@@ -173,6 +173,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         <div class="auth-footer">
             Already have an account? <a href="login.php">Log In</a>
+        </div>
+        <div class="auth-footer" style="margin-top: 12px; font-size: 13px; color: var(--text-secondary);">
+            <a href="index.php"><i class="fa-solid fa-arrow-left"></i> Back to Website</a>
         </div>
     </div>
 

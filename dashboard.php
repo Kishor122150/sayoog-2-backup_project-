@@ -17,10 +17,12 @@ $successes = [];
 
 // Determine active page/tab
 $page = sanitize($_GET['page'] ?? 'home');
-$valid_pages = ['home', 'create-donation', 'request-donation', 'manage-donation', 'manage-request', 'track-donation', 'track-request', 'profile'];
+$valid_pages = ['home', 'create-donation', 'request-donation', 'manage-donation', 'manage-request', 'track-donation', 'track-request', 'profile', 'notifications'];
 if (!in_array($page, $valid_pages)) {
     $page = 'home';
 }
+
+$unread_notification_count = get_unread_notifications_count($pdo, $user_id);
 
 // -------------------------------------------------------------
 // POST ACTIONS HANDLING
@@ -36,6 +38,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $pickup_address = sanitize($_POST['pickup_address'] ?? '');
         $phone = sanitize($_POST['phone'] ?? '');
         $description = sanitize($_POST['description'] ?? '');
+        $image_path = null;
+        $video_path = null;
 
         if (empty($food_item)) $errors[] = "Food item name is required.";
         if (empty($quantity)) $errors[] = "Quantity is required.";
@@ -56,16 +60,251 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $errors[] = "Invalid Nepalese phone number.";
         }
 
+        // File uploads: optional image and video
+        if (!empty($_FILES['image']['name'])) {
+            $imageFile = $_FILES['image'];
+            if ($imageFile['error'] !== UPLOAD_ERR_OK) {
+                $errors[] = "Failed to upload image.";
+            } else {
+                $allowedImageTypes = ['image/jpeg', 'image/png', 'image/webp'];
+                $imageInfo = getimagesize($imageFile['tmp_name']);
+                if (!$imageInfo || !in_array($imageInfo['mime'], $allowedImageTypes, true)) {
+                    $errors[] = "Invalid image file. Allowed: JPG, PNG, WEBP.";
+                } elseif ($imageFile['size'] > 5 * 1024 * 1024) {
+                    $errors[] = "Image size must be 5MB or less.";
+                } else {
+                    $extension = pathinfo($imageFile['name'], PATHINFO_EXTENSION);
+                    $filename = uniqid('donation_img_', true) . '.' . strtolower($extension);
+                    $destination = UPLOADS_DIR . '/' . $filename;
+                    if (move_uploaded_file($imageFile['tmp_name'], $destination)) {
+                        $image_path = 'uploads/' . $filename;
+                    } else {
+                        $errors[] = "Could not save uploaded image.";
+                    }
+                }
+            }
+        }
+
+        if (!empty($_FILES['video']['name'])) {
+            $videoFile = $_FILES['video'];
+            if ($videoFile['error'] !== UPLOAD_ERR_OK) {
+                $errors[] = "Failed to upload video.";
+            } else {
+                $finfo = new finfo(FILEINFO_MIME_TYPE);
+                $videoMime = $finfo->file($videoFile['tmp_name']);
+                $allowedVideoTypes = ['video/mp4', 'video/webm', 'video/ogg'];
+                if (!in_array($videoMime, $allowedVideoTypes, true)) {
+                    $errors[] = "Invalid video file. Allowed: MP4, WEBM, OGG.";
+                } elseif ($videoFile['size'] > 50 * 1024 * 1024) {
+                    $errors[] = "Video size must be 50MB or less.";
+                } else {
+                    $extension = pathinfo($videoFile['name'], PATHINFO_EXTENSION);
+                    $filename = uniqid('donation_vid_', true) . '.' . strtolower($extension);
+                    $destination = UPLOADS_DIR . '/' . $filename;
+                    if (move_uploaded_file($videoFile['tmp_name'], $destination)) {
+                        $video_path = 'uploads/' . $filename;
+                    } else {
+                        $errors[] = "Could not save uploaded video.";
+                    }
+                }
+            }
+        }
+
         if (empty($errors)) {
             try {
-                $stmt = $pdo->prepare("INSERT INTO donations (donor_id, food_item, quantity, expiry_time, pickup_address, phone, description, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'available')");
-                $stmt->execute([$user_id, $food_item, $quantity, $expiry_time, $pickup_address, $phone, $description]);
+                $stmt = $pdo->prepare("INSERT INTO donations (donor_id, food_item, quantity, expiry_time, pickup_address, phone, description, image_path, video_path, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'available')");
+                $stmt->execute([$user_id, $food_item, $quantity, $expiry_time, $pickup_address, $phone, $description, $image_path, $video_path]);
                 set_flash_message('success', 'Your food donation listing has been successfully posted to the feed!');
                 redirect('dashboard.php?page=home');
             } catch (PDOException $e) {
                 $errors[] = "Failed to submit donation: " . $e->getMessage();
             }
         }
+    }
+
+    // Action: Update Donation
+    if ($action === 'update_donation') {
+        $donation_id = intval($_POST['donation_id'] ?? 0);
+        $food_item = sanitize($_POST['food_item'] ?? '');
+        $quantity = sanitize($_POST['quantity'] ?? '');
+        $expiry_time = sanitize($_POST['expiry_time'] ?? '');
+        $pickup_address = sanitize($_POST['pickup_address'] ?? '');
+        $phone = sanitize($_POST['phone'] ?? '');
+        $description = sanitize($_POST['description'] ?? '');
+
+        if ($donation_id <= 0) {
+            $errors[] = "Donation not found.";
+        }
+        if (empty($food_item)) $errors[] = "Food item name is required.";
+        if (empty($quantity)) $errors[] = "Quantity is required.";
+        if (empty($expiry_time)) {
+            $errors[] = "Expiry date & time is required.";
+        } else {
+            $expiry_dt = new DateTime($expiry_time);
+            $now_dt = new DateTime();
+            if ($expiry_dt <= $now_dt) {
+                $errors[] = "Expiry time must be in the future.";
+            }
+        }
+        if (empty($pickup_address)) $errors[] = "Pickup address is required.";
+        if (empty($phone)) {
+            $errors[] = "Contact phone number is required.";
+        } elseif (!validate_nepal_phone($phone)) {
+            $errors[] = "Invalid Nepalese phone number.";
+        }
+
+        if (empty($errors)) {
+            $stmt = $pdo->prepare("SELECT * FROM donations WHERE id = ? AND donor_id = ?");
+            $stmt->execute([$donation_id, $user_id]);
+            $donation = $stmt->fetch();
+            if (!$donation) {
+                $errors[] = "Donation not found or access denied.";
+            }
+        }
+
+        if (empty($errors)) {
+            $image_path = $donation['image_path'];
+            $video_path = $donation['video_path'];
+
+            if (!empty($_FILES['image']['name'])) {
+                $imageFile = $_FILES['image'];
+                if ($imageFile['error'] !== UPLOAD_ERR_OK) {
+                    $errors[] = "Failed to upload image.";
+                } else {
+                    $allowedImageTypes = ['image/jpeg', 'image/png', 'image/webp'];
+                    $imageInfo = getimagesize($imageFile['tmp_name']);
+                    if (!$imageInfo || !in_array($imageInfo['mime'], $allowedImageTypes, true)) {
+                        $errors[] = "Invalid image file. Allowed: JPG, PNG, WEBP.";
+                    } elseif ($imageFile['size'] > 5 * 1024 * 1024) {
+                        $errors[] = "Image size must be 5MB or less.";
+                    } else {
+                        $extension = pathinfo($imageFile['name'], PATHINFO_EXTENSION);
+                        $filename = uniqid('donation_img_', true) . '.' . strtolower($extension);
+                        $destination = UPLOADS_DIR . '/' . $filename;
+                        if (move_uploaded_file($imageFile['tmp_name'], $destination)) {
+                            if (!empty($image_path) && file_exists(__DIR__ . '/' . $image_path)) {
+                                @unlink(__DIR__ . '/' . $image_path);
+                            }
+                            $image_path = 'uploads/' . $filename;
+                        } else {
+                            $errors[] = "Could not save uploaded image.";
+                        }
+                    }
+                }
+            }
+
+            if (!empty($_FILES['video']['name'])) {
+                $videoFile = $_FILES['video'];
+                if ($videoFile['error'] !== UPLOAD_ERR_OK) {
+                    $errors[] = "Failed to upload video.";
+                } else {
+                    $finfo = new finfo(FILEINFO_MIME_TYPE);
+                    $videoMime = $finfo->file($videoFile['tmp_name']);
+                    $allowedVideoTypes = ['video/mp4', 'video/webm', 'video/ogg'];
+                    if (!in_array($videoMime, $allowedVideoTypes, true)) {
+                        $errors[] = "Invalid video file. Allowed: MP4, WEBM, OGG.";
+                    } elseif ($videoFile['size'] > 50 * 1024 * 1024) {
+                        $errors[] = "Video size must be 50MB or less.";
+                    } else {
+                        $extension = pathinfo($videoFile['name'], PATHINFO_EXTENSION);
+                        $filename = uniqid('donation_vid_', true) . '.' . strtolower($extension);
+                        $destination = UPLOADS_DIR . '/' . $filename;
+                        if (move_uploaded_file($videoFile['tmp_name'], $destination)) {
+                            if (!empty($video_path) && file_exists(__DIR__ . '/' . $video_path)) {
+                                @unlink(__DIR__ . '/' . $video_path);
+                            }
+                            $video_path = 'uploads/' . $filename;
+                        } else {
+                            $errors[] = "Could not save uploaded video.";
+                        }
+                    }
+                }
+            }
+        }
+
+        if (empty($errors)) {
+            try {
+                $stmt = $pdo->prepare("UPDATE donations SET food_item = ?, quantity = ?, expiry_time = ?, pickup_address = ?, phone = ?, description = ?, image_path = ?, video_path = ? WHERE id = ?");
+                $stmt->execute([$food_item, $quantity, $expiry_time, $pickup_address, $phone, $description, $image_path, $video_path, $donation_id]);
+                set_flash_message('success', 'Donation updated successfully.');
+                redirect('dashboard.php?page=create-donation');
+            } catch (PDOException $e) {
+                $errors[] = "Failed to update donation: " . $e->getMessage();
+            }
+        }
+    }
+
+    // Action: Toggle Donation Active / Inactive
+    if ($action === 'toggle_donation_status') {
+        $donation_id = intval($_POST['donation_id'] ?? 0);
+        if ($donation_id <= 0) {
+            $errors[] = "Donation not found.";
+        }
+
+        if (empty($errors)) {
+            $stmt = $pdo->prepare("SELECT status FROM donations WHERE id = ? AND donor_id = ?");
+            $stmt->execute([$donation_id, $user_id]);
+            $donation = $stmt->fetch();
+            if (!$donation) {
+                $errors[] = "Donation not found or access denied.";
+            }
+        }
+
+        if (empty($errors)) {
+            if ($donation['status'] === 'cancelled') {
+                $new_status = 'available';
+            } elseif ($donation['status'] === 'available') {
+                $new_status = 'cancelled';
+            } else {
+                $errors[] = "Only available or inactive donations can be toggled.";
+            }
+        }
+
+        if (empty($errors)) {
+            try {
+                $stmt = $pdo->prepare("UPDATE donations SET status = ? WHERE id = ?");
+                $stmt->execute([$new_status, $donation_id]);
+                set_flash_message('success', 'Donation status updated successfully.');
+                redirect('dashboard.php?page=create-donation');
+            } catch (PDOException $e) {
+                $errors[] = "Failed to update donation status: " . $e->getMessage();
+            }
+        }
+    }
+
+    // Action: Delete Donation
+    if ($action === 'delete_donation') {
+        $donation_id = intval($_POST['donation_id'] ?? 0);
+        if ($donation_id <= 0) {
+            $errors[] = "Donation not found.";
+        }
+
+        if (empty($errors)) {
+            $stmt = $pdo->prepare("SELECT * FROM donations WHERE id = ? AND donor_id = ?");
+            $stmt->execute([$donation_id, $user_id]);
+            $donation = $stmt->fetch();
+            if (!$donation) {
+                $errors[] = "Donation not found or access denied.";
+            }
+        }
+
+        if (empty($errors)) {
+            try {
+                $stmt = $pdo->prepare("DELETE FROM donations WHERE id = ?");
+                $stmt->execute([$donation_id]);
+                set_flash_message('success', 'Donation removed successfully.');
+                redirect('dashboard.php?page=create-donation');
+            } catch (PDOException $e) {
+                $errors[] = "Failed to delete donation: " . $e->getMessage();
+            }
+        }
+    }
+
+    // Action: Mark Notifications Read
+    if ($action === 'mark_notifications_read') {
+        mark_all_notifications_read($pdo, $user_id);
+        set_flash_message('success', 'All notifications have been marked as read.');
+        redirect('dashboard.php?page=notifications');
     }
 
     // Action: Request Donation (Any user can request other users' food)
@@ -157,6 +396,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt = $pdo->prepare("UPDATE requests SET status = 'rejected' WHERE donation_id = ? AND id != ? AND status = 'pending'");
                 $stmt->execute([$request['donation_id'], $request_id]);
 
+                create_notification(
+                    $pdo,
+                    $request['consumer_id'],
+                    'request_approved',
+                    'Your request has been approved and the donor will contact you for pickup.',
+                    'dashboard.php?page=track-request',
+                    true
+                );
+
                 $pdo->commit();
                 set_flash_message('success', 'Request approved! Consumer details are now open for pickup.');
                 redirect('dashboard.php?page=manage-donation');
@@ -173,7 +421,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         try {
             $stmt = $pdo->prepare("
-                SELECT r.*, d.donor_id, d.id AS donation_id 
+                SELECT r.*, d.donor_id, d.id AS donation_id, d.food_item 
                 FROM requests r 
                 JOIN donations d ON r.donation_id = d.id 
                 WHERE r.id = ?
@@ -191,6 +439,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // Mark request as rejected
                 $stmt = $pdo->prepare("UPDATE requests SET status = 'rejected' WHERE id = ?");
                 $stmt->execute([$request_id]);
+
+                create_notification(
+                    $pdo,
+                    $request['consumer_id'],
+                    'request_rejected',
+                    'Your request for "' . $request['food_item'] . '" has been rejected.',
+                    'dashboard.php?page=track-request',
+                    true
+                );
 
                 // Check if there are other pending requests left for this donation
                 $stmt = $pdo->prepare("SELECT COUNT(*) FROM requests WHERE donation_id = ? AND status = 'pending'");
@@ -397,22 +654,28 @@ $flash = get_flash_message();
 
                 <a href="dashboard.php?page=manage-donation" class="nav-item <?php echo $page === 'manage-donation' ? 'active' : ''; ?>">
                     <i class="fa-solid fa-list-check"></i>
-                    <span>Manage Donation</span>
+                    <!-- <span>Manage Donation</span> -->
+                         <span>Manage incoming Request</span>
                 </a>
 
                 <a href="dashboard.php?page=manage-request" class="nav-item <?php echo $page === 'manage-request' ? 'active' : ''; ?>">
                     <i class="fa-solid fa-file-invoice"></i>
-                    <span>Manage Requests</span>
+                    <span>Our Requests</span>
                 </a>
 
                 <a href="dashboard.php?page=track-donation" class="nav-item <?php echo $page === 'track-donation' ? 'active' : ''; ?>">
                     <i class="fa-solid fa-map-location-dot"></i>
-                    <span>Track Donations</span>
+                    <span>Track our Donations</span>
                 </a>
 
                 <a href="dashboard.php?page=track-request" class="nav-item <?php echo $page === 'track-request' ? 'active' : ''; ?>">
                     <i class="fa-solid fa-route"></i>
-                    <span>Track Requests</span>
+                    <span>Track our Requests</span>
+                </a>
+
+                <a href="dashboard.php?page=notifications" class="nav-item <?php echo $page === 'notifications' ? 'active' : ''; ?>">
+                    <i class="fa-solid fa-bell"></i>
+                    <span>Notifications</span>
                 </a>
 
                 <a href="dashboard.php?page=profile" class="nav-item <?php echo $page === 'profile' ? 'active' : ''; ?>">
@@ -445,12 +708,19 @@ $flash = get_flash_message();
                                 case 'manage-request': echo "Manage Your Food Requests"; break;
                                 case 'track-donation': echo "Track Active Donations"; break;
                                 case 'track-request': echo "Track Food Requests"; break;
+                                case 'notifications': echo "Notifications"; break;
                                 case 'profile': echo "Edit Profile"; break;
                             }
                         ?>
                     </h1>
                 </div>
                 <div class="header-actions">
+                    <a href="dashboard.php?page=notifications" class="header-notifications">
+                        <i class="fa-solid fa-bell"></i>
+                        <?php if (!empty($unread_notification_count)): ?>
+                            <span class="notification-badge"><?php echo $unread_notification_count; ?></span>
+                        <?php endif; ?>
+                    </a>
                     <div style="font-size: 13.5px; font-weight: 600; color: var(--text-secondary);">
                         <i class="fa-solid fa-calendar-day" style="margin-right: 4px; color: var(--primary);"></i>
                         Today: <?php echo date('M d, Y'); ?>
@@ -549,6 +819,20 @@ $flash = get_flash_message();
                         </div>
                     </div>
 
+                    <div class="home-toolbar">
+                        <div class="home-search">
+                            <i class="fa-solid fa-magnifying-glass"></i>
+                            <input type="search" id="homeFeedSearch" class="form-control" placeholder="Search food, donor or location...">
+                        </div>
+                        <div class="filter-chips">
+                            <button type="button" class="filter-chip active" data-filter="all">All</button>
+                            <button type="button" class="filter-chip" data-filter="available">Available</button>
+                            <button type="button" class="filter-chip" data-filter="requested">Requested</button>
+                            <button type="button" class="filter-chip" data-filter="accepted">Accepted</button>
+                            <button type="button" class="filter-chip" data-filter="completed">Completed</button>
+                        </div>
+                    </div>
+
                     <!-- Feed Composer Trigger (Facebook Style - visible to all users) -->
                     <div class="post-creator-card" style="max-width: 680px; margin: 0 auto 24px auto;">
                         <div class="post-creator-header">
@@ -604,7 +888,7 @@ $flash = get_flash_message();
                                     $has_requested = true;
                                 }
                                 ?>
-                                <div class="feed-card">
+                                <div class="feed-card" data-status="<?php echo htmlspecialchars($post['status']); ?>" data-search="<?php echo strtolower(htmlspecialchars($post['food_item'] . ' ' . $post['donor_name'] . ' ' . $post['pickup_address'])); ?>">
                                     <div class="feed-card-header">
                                         <div class="feed-user-avatar" style="background: linear-gradient(135deg, var(--primary) 0%, #0d9488 100%);">
                                             <?php echo $post_initials; ?>
@@ -628,6 +912,21 @@ $flash = get_flash_message();
                                         
                                         <?php if (!empty($post['description'])): ?>
                                             <p class="feed-food-description"><?php echo htmlspecialchars($post['description']); ?></p>
+                                        <?php endif; ?>
+
+                                        <?php if (!empty($post['image_path']) || !empty($post['video_path'])): ?>
+                                            <div class="feed-media-preview">
+                                                <?php if (!empty($post['image_path'])): ?>
+                                                    <img src="<?php echo htmlspecialchars($post['image_path']); ?>" alt="Donation Image" class="feed-card-image">
+                                                <?php endif; ?>
+
+                                                <?php if (!empty($post['video_path'])): ?>
+                                                    <video controls class="feed-card-video">
+                                                        <source src="<?php echo htmlspecialchars($post['video_path']); ?>" type="video/mp4">
+                                                        Your browser does not support the video tag.
+                                                    </video>
+                                                <?php endif; ?>
+                                            </div>
                                         <?php endif; ?>
 
                                         <div class="feed-food-details">
@@ -726,6 +1025,35 @@ $flash = get_flash_message();
                         function closeRequestModal() {
                             document.getElementById('requestModal').classList.remove('active');
                         }
+
+                        (function() {
+                            const searchInput = document.getElementById('homeFeedSearch');
+                            const filterButtons = document.querySelectorAll('.home-toolbar .filter-chip');
+                            const feedCards = document.querySelectorAll('.feed-card');
+
+                            function applyFilters() {
+                                const query = searchInput ? searchInput.value.toLowerCase().trim() : '';
+                                const activeFilter = document.querySelector('.home-toolbar .filter-chip.active')?.dataset.filter || 'all';
+
+                                feedCards.forEach(card => {
+                                    const matchesSearch = !query || card.dataset.search.includes(query);
+                                    const matchesStatus = activeFilter === 'all' || card.dataset.status === activeFilter;
+                                    card.style.display = (matchesSearch && matchesStatus) ? 'block' : 'none';
+                                });
+                            }
+
+                            if (searchInput) {
+                                searchInput.addEventListener('input', applyFilters);
+                            }
+
+                            filterButtons.forEach(button => {
+                                button.addEventListener('click', () => {
+                                    filterButtons.forEach(btn => btn.classList.remove('active'));
+                                    button.classList.add('active');
+                                    applyFilters();
+                                });
+                            });
+                        })();
                     </script>
 
                 <?php
@@ -733,74 +1061,234 @@ $flash = get_flash_message();
                 // TAB: CREATE DONATION
                 // =============================================================
                 } elseif ($page === 'create-donation') {
+                    $myDonationStmt = $pdo->prepare("SELECT * FROM donations WHERE donor_id = ? ORDER BY created_at DESC");
+                    $myDonationStmt->execute([$user_id]);
+                    $myDonations = $myDonationStmt->fetchAll();
                     ?>
-                    <div style="max-width: 600px; margin: 0 auto; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 30px; box-shadow: var(--shadow-sm);">
-                        <h2 style="font-size: 20px; font-weight: 800; margin-bottom: 20px; color: var(--text-primary); border-bottom: 1.5px solid var(--border); padding-bottom: 10px;">
-                            <i class="fa-solid fa-gift" style="color: var(--primary); margin-right: 6px;"></i> Share Surplus Food
-                        </h2>
-                        
-                        <form action="dashboard.php?page=create-donation" method="POST" id="createDonationForm" novalidate>
-                            <input type="hidden" name="action" value="create_donation">
-
-                            <div class="form-group">
-                                <label for="food_item" class="form-label">Food Item / Name</label>
-                                <input type="text" id="food_item" name="food_item" class="form-control" placeholder="E.g., Cooked Rice and Veg curry, Baker's Bread" required>
-                                <div class="validation-hint">Be clear about what type of food it is.</div>
+                    <div style="max-width: 920px; margin: 0 auto 24px;">
+                        <div style="display:flex; flex-wrap:wrap; justify-content:space-between; gap:16px; align-items:center; margin-bottom:24px;">
+                            <div>
+                                <h2 style="font-size: 22px; font-weight: 800; margin-bottom: 8px; color: var(--text-primary);">Create Donation</h2>
+                                <p style="margin: 0; color: var(--text-secondary); max-width: 620px;">
+                                    Click the button to open the donation form, then your donation listings are shown below for easy review and management.
+                                </p>
                             </div>
-
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label for="quantity" class="form-label">Quantity</label>
-                                    <input type="text" id="quantity" name="quantity" class="form-control" placeholder="E.g., 5 plates, 10 packets, 3 kg" required>
-                                </div>
-                                <div class="form-group">
-                                    <label for="expiry_time" class="form-label">Expiry / Consume Before</label>
-                                    <input type="datetime-local" id="expiry_time" name="expiry_time" class="form-control" required>
-                                </div>
-                            </div>
-
-                            <div class="form-group">
-                                <label for="pickup_address" class="form-label">Pickup Location Address</label>
-                                <input type="text" id="pickup_address" name="pickup_address" class="form-control" value="<?php echo htmlspecialchars($user_address); ?>" required>
-                            </div>
-
-                            <div class="form-group">
-                                <label for="phone" class="form-label">Contact Phone Number</label>
-                                <input type="tel" id="phone" name="phone" class="form-control" value="<?php echo htmlspecialchars($user_phone); ?>" required>
-                                <div class="validation-hint" id="phone-hint">Valid Nepal phone format</div>
-                            </div>
-
-                            <div class="form-group">
-                                <label for="description" class="form-label">Description / Storage Details (Optional)</label>
-                                <textarea id="description" name="description" class="form-control" rows="4" placeholder="E.g., Cooked today at 2 PM. Kept under refrigeration. Contains dairy products. Please bring your own container."></textarea>
-                            </div>
-
-                            <button type="submit" class="btn btn-primary btn-block" style="margin-top: 10px;">
-                                <i class="fa-solid fa-circle-check"></i> Post Food Donation Listing
+                            <button type="button" class="btn btn-primary" onclick="openDonationModal()">
+                                <i class="fa-solid fa-circle-plus" style="margin-right: 8px;"></i> Add New Donation
                             </button>
-                        </form>
+                        </div>
+
+                        <div class="info-grid">
+                            <div class="info-card">
+                                <span class="info-chip">Step 1</span>
+                                <h4>Open the donation form</h4>
+                                <p>Tap the button above to add a new food donation. The form appears in a clean popup so you can stay on this page.</p>
+                            </div>
+                            <div class="info-card">
+                                <span class="info-chip">Step 2</span>
+                                <h4>Review your listings</h4>
+                                <p>Your donations appear in the section below once posted. This helps you track availability and status quickly.</p>
+                            </div>
+                        </div>
+
+                        <div class="section-divider"><span>Your donation listings</span></div>
+                        <div style="margin-bottom: 32px;">
+                            <?php if (empty($myDonations)): ?>
+                                <div class="empty-state">
+                                    <i class="fa-solid fa-box-open"></i>
+                                    <h3>No donation listings yet</h3>
+                                    <p>Click the button above to add your first donation to the community feed.</p>
+                                </div>
+                            <?php else: ?>
+                                <div class="feed-container">
+                                    <h3 style="font-size: 18px; font-weight: 700; color: var(--text-secondary); margin-bottom: 16px;">
+                                        My donation listings
+                                    </h3>
+                                    <?php foreach ($myDonations as $donation): ?>
+                                        <div class="feed-card" style="margin-bottom: 16px;">
+                                            <div class="feed-card-header">
+                                                <div class="feed-user-avatar" style="background: linear-gradient(135deg, var(--primary) 0%, #0d9488 100%);">
+                                                    <?php echo strtoupper(substr($initials, 0, 2)); ?>
+                                                </div>
+                                                <div class="feed-header-info">
+                                                    <div class="feed-user-name">Your Donation</div>
+                                                    <div class="feed-post-meta"><span><?php echo date('M d, Y h:i A', strtotime($donation['created_at'])); ?></span></div>
+                                                </div>
+                                                <div>
+                                                    <span class="status-badge status-<?php echo htmlspecialchars($donation['status']); ?>">
+                                                        <?php echo htmlspecialchars($donation['status']); ?>
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <div class="feed-card-body">
+                                                <h3 class="feed-food-title"><?php echo htmlspecialchars($donation['food_item']); ?></h3>
+                                                <div class="feed-food-details">
+                                                    <div class="detail-item"><i class="fa-solid fa-boxes-stacked"></i><span><strong>Quantity:</strong> <?php echo htmlspecialchars($donation['quantity']); ?></span></div>
+                                                    <div class="detail-item"><i class="fa-solid fa-hourglass-half"></i><span><strong>Consume Before:</strong> <?php echo date('M d, Y h:i A', strtotime($donation['expiry_time'])); ?></span></div>
+                                                    <div class="detail-item" style="grid-column: span 2;"><i class="fa-solid fa-map-pin"></i><span><strong>Pickup:</strong> <?php echo htmlspecialchars($donation['pickup_address']); ?></span></div>
+                                                </div>
+                                            </div>
+                                            <div class="feed-card-footer" style="gap: 10px; flex-wrap: wrap;">
+                                                <button type="button" class="btn btn-secondary" onclick='openDonationModal("update", <?php echo json_encode($donation, JSON_HEX_APOS | JSON_HEX_QUOT); ?>)'>
+                                                    <i class="fa-solid fa-pen-to-square"></i> Edit
+                                                </button>
+                                                <?php if (in_array($donation['status'], ['available', 'cancelled'])): ?>
+                                                    <form action="dashboard.php?page=create-donation" method="POST" style="display:inline; margin:0;">
+                                                        <input type="hidden" name="action" value="toggle_donation_status">
+                                                        <input type="hidden" name="donation_id" value="<?php echo $donation['id']; ?>">
+                                                        <button type="submit" class="btn btn-secondary" style="background: <?php echo $donation['status'] === 'available' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)'; ?>; color: <?php echo $donation['status'] === 'available' ? '#b91c1c' : '#0f766e'; ?>;">
+                                                            <i class="fa-solid <?php echo $donation['status'] === 'available' ? 'fa-toggle-off' : 'fa-toggle-on'; ?>"></i>
+                                                            <?php echo $donation['status'] === 'available' ? 'Inactivate' : 'Activate'; ?>
+                                                        </button>
+                                                    </form>
+                                                <?php endif; ?>
+                                                <form action="dashboard.php?page=create-donation" method="POST" style="display:inline; margin:0;">
+                                                    <input type="hidden" name="action" value="delete_donation">
+                                                    <input type="hidden" name="donation_id" value="<?php echo $donation['id']; ?>">
+                                                    <button type="submit" class="btn btn-danger" onclick="return confirm('Delete this donation permanently?');">
+                                                        <i class="fa-solid fa-trash"></i> Delete
+                                                    </button>
+                                                </form>
+                                            </div>
+                                        </div>
+                                    <?php endforeach; ?>
+                                </div>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+
+                    <div class="modal-overlay" id="createDonationModal">
+                        <div class="modal-container">
+                            <div class="modal-header">
+                                <h3 class="modal-title"><i class="fa-solid fa-gift" style="margin-right: 8px; color: var(--primary);"></i> Share Surplus Food</h3>
+                                <button class="modal-close" onclick="closeDonationModal()">&times;</button>
+                            </div>
+                            <form action="dashboard.php?page=create-donation" method="POST" id="createDonationForm" enctype="multipart/form-data" novalidate>
+                                <input type="hidden" name="action" value="create_donation">
+                            <input type="hidden" name="donation_id" id="donation_id" value="">
+
+                                <div class="modal-body">
+                                    <div class="form-group">
+                                        <label for="food_item" class="form-label">Food Item / Name</label>
+                                        <input type="text" id="food_item" name="food_item" class="form-control" placeholder="E.g., Cooked Rice and Veg curry, Baker's Bread" required>
+                                        <div class="validation-hint">Be clear about what type of food it is.</div>
+                                    </div>
+
+                                    <div class="form-row">
+                                        <div class="form-group">
+                                            <label for="quantity" class="form-label">Quantity</label>
+                                            <input type="text" id="quantity" name="quantity" class="form-control" placeholder="E.g., 5 plates, 10 packets, 3 kg" required>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="expiry_time" class="form-label">Expiry / Consume Before</label>
+                                            <input type="datetime-local" id="expiry_time" name="expiry_time" class="form-control" required>
+                                        </div>
+                                    </div>
+
+                                    <div class="form-group">
+                                        <label for="pickup_address" class="form-label">Pickup Location Address</label>
+                                        <input type="text" id="pickup_address" name="pickup_address" class="form-control" value="<?php echo htmlspecialchars($user_address); ?>" required>
+                                    </div>
+
+                                    <div class="form-group">
+                                        <label for="phone" class="form-label">Contact Phone Number</label>
+                                        <input type="tel" id="phone" name="phone" class="form-control" value="<?php echo htmlspecialchars($user_phone); ?>" required>
+                                        <div class="validation-hint" id="phone-hint">Valid Nepal phone format</div>
+                                    </div>
+
+                                    <div class="form-group">
+                                        <label for="description" class="form-label">Description / Storage Details (Optional)</label>
+                                        <textarea id="description" name="description" class="form-control" rows="4" placeholder="E.g., Cooked today at 2 PM. Kept under refrigeration. Contains dairy products. Please bring your own container."></textarea>
+                                    </div>
+
+                                    <div class="form-row">
+                                        <div class="form-group">
+                                            <label for="image" class="form-label">Upload Food Photo (Optional)</label>
+                                            <input type="file" id="image" name="image" class="form-control" accept="image/*">
+                                            <div class="validation-hint">Allowed types: JPG, PNG, WEBP. Max 5MB.</div>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="video" class="form-label">Upload Video (Optional)</label>
+                                            <input type="file" id="video" name="video" class="form-control" accept="video/*">
+                                            <div class="validation-hint">Allowed types: MP4, WEBM, OGG. Max 50MB.</div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="modal-body" style="display:flex; justify-content:flex-end; gap:12px; border-top:1px solid var(--border); padding-top:20px;">
+                                    <button type="button" class="btn btn-secondary" onclick="closeDonationModal()">Cancel</button>
+                                    <button type="submit" class="btn btn-primary">Post Food Donation Listing</button>
+                                </div>
+                            </form>
+                        </div>
                     </div>
 
                     <script>
-                        const phoneInput = document.getElementById('phone');
-                        const phoneHint = document.getElementById('phone-hint');
-                        
-                        phoneInput.addEventListener('input', function() {
-                            const val = phoneInput.value.trim();
-                            const mobilePattern = /^(98|97|96)\d{8}$/;
-                            const landlinePattern = /^01\d{7}$/;
-                            
-                            if (val.length === 0) {
-                                phoneHint.style.color = '';
-                                phoneHint.textContent = 'Valid Nepal phone format';
-                            } else if (mobilePattern.test(val) || landlinePattern.test(val)) {
-                                phoneHint.style.color = '#10b981';
-                                phoneHint.innerHTML = '<i class="fa-solid fa-circle-check"></i> Valid Nepalese Phone Number';
+                        function openDonationModal(mode = 'create', donation = null) {
+                            const modal = document.getElementById('createDonationModal');
+                            const title = modal.querySelector('.modal-title');
+                            const submitBtn = modal.querySelector('button[type="submit"]');
+                            const actionInput = document.querySelector('#createDonationForm input[name="action"]');
+                            const donationIdInput = document.getElementById('donation_id');
+                            const foodInput = document.getElementById('food_item');
+                            const quantityInput = document.getElementById('quantity');
+                            const expiryInput = document.getElementById('expiry_time');
+                            const addressInput = document.getElementById('pickup_address');
+                            const phoneInput = document.getElementById('phone');
+                            const descriptionInput = document.getElementById('description');
+
+                            if (mode === 'update' && donation) {
+                                title.innerHTML = '<i class="fa-solid fa-pen-to-square" style="margin-right: 8px; color: var(--primary);"></i> Update Donation';
+                                submitBtn.textContent = 'Save Changes';
+                                actionInput.value = 'update_donation';
+                                donationIdInput.value = donation.id;
+                                foodInput.value = donation.food_item || '';
+                                quantityInput.value = donation.quantity || '';
+                                expiryInput.value = donation.expiry_time ? donation.expiry_time.replace(' ', 'T') : '';
+                                addressInput.value = donation.pickup_address || '<?php echo htmlspecialchars($user_address); ?>';
+                                phoneInput.value = donation.phone || '<?php echo htmlspecialchars($user_phone); ?>';
+                                descriptionInput.value = donation.description || '';
                             } else {
-                                phoneHint.style.color = '#ef4444';
-                                phoneHint.innerHTML = '<i class="fa-solid fa-circle-xmark"></i> Invalid format. Use 98/97/96 (10 digits) or 01 (9 digits)';
+                                title.innerHTML = '<i class="fa-solid fa-gift" style="margin-right: 8px; color: var(--primary);"></i> Share Surplus Food';
+                                submitBtn.textContent = 'Post Food Donation Listing';
+                                actionInput.value = 'create_donation';
+                                donationIdInput.value = '';
+                                foodInput.value = '';
+                                quantityInput.value = '';
+                                expiryInput.value = '';
+                                addressInput.value = '<?php echo htmlspecialchars($user_address); ?>';
+                                phoneInput.value = '<?php echo htmlspecialchars($user_phone); ?>';
+                                descriptionInput.value = '';
                             }
-                        });
+
+                            modal.classList.add('active');
+                        }
+                        function closeDonationModal() {
+                            document.getElementById('createDonationModal').classList.remove('active');
+                        }
+
+                        (function() {
+                            const phoneInput = document.getElementById('phone');
+                            const phoneHint = document.getElementById('phone-hint');
+                            if (!phoneInput || !phoneHint) return;
+
+                            phoneInput.addEventListener('input', function() {
+                                const val = phoneInput.value.trim();
+                                const mobilePattern = /^(98|97|96)\d{8}$/;
+                                const landlinePattern = /^01\d{7}$/;
+                                
+                                if (val.length === 0) {
+                                    phoneHint.style.color = '';
+                                    phoneHint.textContent = 'Valid Nepal phone format';
+                                } else if (mobilePattern.test(val) || landlinePattern.test(val)) {
+                                    phoneHint.style.color = '#10b981';
+                                    phoneHint.innerHTML = '<i class="fa-solid fa-circle-check"></i> Valid Nepalese Phone Number';
+                                } else {
+                                    phoneHint.style.color = '#ef4444';
+                                    phoneHint.innerHTML = '<i class="fa-solid fa-circle-xmark"></i> Invalid format. Use 98/97/96 (10 digits) or 01 (9 digits)';
+                                }
+                            });
+                        })();
                     </script>
 
                 <?php
@@ -860,7 +1348,7 @@ $flash = get_flash_message();
                                         </h3>
                                         
                                         <?php if (!empty($card['description'])): ?>
-                                            <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 12px; height: 40px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;">
+                                            <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 12px; height: 40px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-clamp: 2;">
                                                 <?php echo htmlspecialchars($card['description']); ?>
                                             </p>
                                         <?php endif; ?>
@@ -958,6 +1446,51 @@ $flash = get_flash_message();
                             document.getElementById('requestModal').classList.remove('active');
                         }
                     </script>
+
+                <?php
+                // =============================================================
+                // TAB: NOTIFICATIONS
+                // =============================================================
+                } elseif ($page === 'notifications') {
+                    $notifications = get_user_notifications($pdo, $user_id);
+                    ?>
+                    <div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 18px;">
+                        <p style="color: var(--text-secondary); font-size: 14.5px; margin: 0;">Your latest activity updates are shown here. You can also email notifications if configured.</p>
+
+                        <?php if (!empty($notifications)): ?>
+                            <form action="dashboard.php?page=notifications" method="POST" style="margin: 0;">
+                                <input type="hidden" name="action" value="mark_notifications_read">
+                                <button type="submit" class="btn btn-secondary" style="min-width: 190px;">Mark All as Read</button>
+                            </form>
+                        <?php endif; ?>
+                    </div>
+
+                    <?php if (empty($notifications)): ?>
+                        <div class="empty-state">
+                            <i class="fa-solid fa-bell-slash"></i>
+                            <h3>No notifications yet</h3>
+                            <p>Notifications about accepted or rejected requests will appear here.</p>
+                        </div>
+                    <?php else: ?>
+                        <div class="notifications-list">
+                            <?php foreach ($notifications as $notification): ?>
+                                <div class="notification-card <?php echo $notification['is_read'] ? 'read' : 'unread'; ?>">
+                                    <div class="notification-card-main">
+                                        <div>
+                                            <h4><?php echo htmlspecialchars(ucfirst(str_replace('_', ' ', $notification['type']))); ?></h4>
+                                            <p><?php echo htmlspecialchars($notification['message']); ?></p>
+                                        </div>
+                                        <span class="notification-meta"><?php echo date('M d, Y h:i A', strtotime($notification['created_at'])); ?></span>
+                                    </div>
+                                    <?php if (!empty($notification['link'])): ?>
+                                        <div class="notification-card-footer">
+                                            <a href="<?php echo htmlspecialchars($notification['link']); ?>" class="btn btn-outline">View Details</a>
+                                        </div>
+                                    <?php endif; ?>
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
+                    <?php endif; ?>
 
                 <?php
                 // =============================================================
@@ -1460,25 +1993,28 @@ $flash = get_flash_message();
                     </div>
                     
                     <script>
-                        const phoneInput = document.getElementById('phone');
-                        const phoneHint = document.getElementById('phone-hint');
-                        
-                        phoneInput.addEventListener('input', function() {
-                            const val = phoneInput.value.trim();
-                            const mobilePattern = /^(98|97|96)\d{8}$/;
-                            const landlinePattern = /^01\d{7}$/;
-                            
-                            if (val.length === 0) {
-                                phoneHint.style.color = '';
-                                phoneHint.textContent = 'Nepal mobile (98XXXXXXXX) or landline (01XXXXXXX)';
-                            } else if (mobilePattern.test(val) || landlinePattern.test(val)) {
-                                phoneHint.style.color = '#10b981';
-                                phoneHint.innerHTML = '<i class="fa-solid fa-circle-check"></i> Valid Nepalese Phone Number';
-                            } else {
-                                phoneHint.style.color = '#ef4444';
-                                phoneHint.innerHTML = '<i class="fa-solid fa-circle-xmark"></i> Invalid format. Use 98/97/96 (10 digits) or 01 (9 digits)';
-                            }
-                        });
+                        (function() {
+                            const phoneInput = document.getElementById('phone');
+                            const phoneHint = document.getElementById('phone-hint');
+                            if (!phoneInput || !phoneHint) return;
+
+                            phoneInput.addEventListener('input', function() {
+                                const val = phoneInput.value.trim();
+                                const mobilePattern = /^(98|97|96)\d{8}$/;
+                                const landlinePattern = /^01\d{7}$/;
+                                
+                                if (val.length === 0) {
+                                    phoneHint.style.color = '';
+                                    phoneHint.textContent = 'Nepal mobile (98XXXXXXXX) or landline (01XXXXXXX)';
+                                } else if (mobilePattern.test(val) || landlinePattern.test(val)) {
+                                    phoneHint.style.color = '#10b981';
+                                    phoneHint.innerHTML = '<i class="fa-solid fa-circle-check"></i> Valid Nepalese Phone Number';
+                                } else {
+                                    phoneHint.style.color = '#ef4444';
+                                    phoneHint.innerHTML = '<i class="fa-solid fa-circle-xmark"></i> Invalid format. Use 98/97/96 (10 digits) or 01 (9 digits)';
+                                }
+                            });
+                        })();
                     </script>
                     <?php
                 }

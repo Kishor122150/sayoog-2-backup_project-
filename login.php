@@ -9,10 +9,12 @@ if (is_logged_in()) {
 $errors = [];
 $email = '';
 $flash = get_flash_message();
+$redirect = sanitize($_GET['redirect'] ?? $_POST['redirect'] ?? '');
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $email = sanitize($_POST['email'] ?? '');
     $password = $_POST['password'] ?? '';
+    $redirect = sanitize($_POST['redirect'] ?? '');
 
     if (empty($email)) {
         $errors[] = "Email is required.";
@@ -28,15 +30,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $user = $stmt->fetch();
 
             if ($user && password_verify($password, $user['password'])) {
-                // Login successful, set session variables
-                $_SESSION['user_id'] = $user['id'];
-                $_SESSION['user_name'] = $user['name'];
-                $_SESSION['user_email'] = $user['email'];
-                $_SESSION['user_address'] = $user['address'];
-                $_SESSION['user_phone'] = $user['phone'];
-
-                // Redirect to dashboard
-                redirect('dashboard.php');
+                if (($user['role'] ?? 'user') === 'admin') {
+                    $errors[] = 'Admin users must sign in through the admin portal.';
+                } else {
+                    // Login successful, set session variables
+                    $_SESSION['user_id'] = $user['id'];
+                    $_SESSION['user_name'] = $user['name'];
+                    $_SESSION['user_email'] = $user['email'];
+                    $_SESSION['user_address'] = $user['address'];
+                    $_SESSION['user_phone'] = $user['phone'];
+                    $_SESSION['user_role'] = $user['role'] ?? 'user';
+                    if (!empty($redirect) && strpos($redirect, 'http') !== 0 && strpos($redirect, '//') !== 0) {
+                        redirect($redirect);
+                    }
+                    redirect('dashboard.php');
+                }
             } else {
                 $errors[] = "Invalid email or password combination.";
             }
@@ -92,6 +100,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <?php endif; ?>
 
         <form action="login.php" method="POST" novalidate>
+            <input type="hidden" name="redirect" value="<?php echo htmlspecialchars($redirect); ?>">
             <!-- Email -->
             <div class="form-group">
                 <label for="email" class="form-label">Email Address</label>
@@ -113,6 +122,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         <div class="auth-footer">
             Don't have an account? <a href="register.php">Sign Up</a>
+        </div>
+        <div class="auth-footer" style="margin-top: 12px; font-size: 13px; color: var(--text-secondary);">
+            <a href="index.php"><i class="fa-solid fa-arrow-left"></i> Back to Website</a>
+        </div>
+        <div class="auth-footer" style="margin-top: 12px; font-size: 13px; color: var(--text-secondary);">
+            Are you an administrator? <a href="admin-login.php">Sign in to Admin Panel</a>
         </div>
     </div>
 </body>
