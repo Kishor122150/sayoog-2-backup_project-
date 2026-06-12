@@ -44,7 +44,9 @@ $listings = get_available_donations($pdo);
                     <a href="login.php" class="btn btn-secondary">Member Login</a>
                 </div>
             </div>
-            <div class="hero-image"></div>
+            <div class="hero-image">
+                <img src="https://cdn2.psychologytoday.com/assets/styles/manual_crop_4_3_1200x900/public/field_blog_entry_images/2020-02/adobestock_144255497.jpeg.jpg?itok=YA-dauNi" width="100%" height="100%" alt="Food Donation">
+            </div>
         </section>
 
         <section class="product-preview">

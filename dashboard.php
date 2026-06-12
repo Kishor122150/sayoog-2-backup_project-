@@ -9,6 +9,7 @@ if (!is_logged_in()) {
 $user_id = $_SESSION['user_id'];
 $user_name = $_SESSION['user_name'];
 $user_email = $_SESSION['user_email'];
+// var_dump($_SESSION);
 $user_address = $_SESSION['user_address'];
 $user_phone = $_SESSION['user_phone'];
 
@@ -23,6 +24,15 @@ if (!in_array($page, $valid_pages)) {
 }
 
 $unread_notification_count = get_unread_notifications_count($pdo, $user_id);
+
+// -------------------------------------------------------------
+// AJAX: unread notifications count (for live header badge)
+// -------------------------------------------------------------
+if (isset($_GET['ajax']) && $_GET['ajax'] === 'unread_notifications_count') {
+    header('Content-Type: application/json');
+    echo json_encode(['count' => (int) get_unread_notifications_count($pdo, $user_id)]);
+    exit();
+}
 
 // -------------------------------------------------------------
 // POST ACTIONS HANDLING
@@ -715,12 +725,40 @@ $flash = get_flash_message();
                     </h1>
                 </div>
                 <div class="header-actions">
-                    <a href="dashboard.php?page=notifications" class="header-notifications">
+<a href="dashboard.php?page=notifications" class="header-notifications" aria-label="Notifications">
                         <i class="fa-solid fa-bell"></i>
-                        <?php if (!empty($unread_notification_count)): ?>
-                            <span class="notification-badge"><?php echo $unread_notification_count; ?></span>
-                        <?php endif; ?>
+                        <span class="notification-badge" aria-label="Unread notifications" <?php echo empty($unread_notification_count) ? 'style="display:none;"' : ''; ?>>
+                            <?php echo (int)$unread_notification_count; ?>
+                        </span>
                     </a>
+
+                    <script>
+                        // Live badge refresh (no code changes in other UI)
+                        (function () {
+                            const link = document.querySelector('.header-notifications');
+                            if (!link) return;
+
+                            // Poll every 5s to update unread count without page reload
+                            const badge = link.querySelector('.notification-badge');
+                            if (!badge) return;
+
+                            async function refreshBadge() {
+                                try {
+                                    const res = await fetch('dashboard.php?ajax=unread_notifications_count', { cache: 'no-store' });
+                                    if (!res.ok) return;
+                                    const data = await res.json();
+                                    const count = Number(data.count || 0);
+                                    badge.textContent = count;
+                                    badge.style.display = count > 0 ? 'inline-flex' : 'none';
+                                } catch (e) {
+                                    // ignore
+                                }
+                            }
+
+                            refreshBadge();
+                            setInterval(refreshBadge, 5000);
+                        })();
+                    </script>
                     <div style="font-size: 13.5px; font-weight: 600; color: var(--text-secondary);">
                         <i class="fa-solid fa-calendar-day" style="margin-right: 4px; color: var(--primary);"></i>
                         Today: <?php echo date('M d, Y'); ?>
