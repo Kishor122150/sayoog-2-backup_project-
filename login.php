@@ -120,6 +120,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </button>
         </form>
 
+        <div style="text-align: center; margin: 15px 0; position: relative;">
+            <hr style="border: 0; border-top: 1px solid var(--border); margin: 0;">
+            <span style="position: absolute; top: -10px; left: 50%; transform: translateX(-50%); background: var(--surface); padding: 0 10px; font-size: 13px; color: var(--text-secondary);">or</span>
+        </div>
+
+        <a href="#" class="btn btn-block" style="background-color: white; color: #333; border: 1px solid #ddd; margin-bottom: 10px; display: flex; align-items: center; justify-content: center; gap: 8px; text-decoration: none;">
+            <img src="https://developers.google.com/identity/images/g-logo.png" alt="Google logo" width="20" height="20">
+            Sign in with Google
+        </a>
+
         <div class="auth-footer">
             Don't have an account? <a href="register.php">Sign Up</a>
         </div>

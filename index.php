@@ -24,6 +24,7 @@ $listings = get_available_donations($pdo);
             <a href="about.php">About</a>
             <a href="contact.php">Contact</a>
             <a href="login.php">Login</a>
+            <a href="register.php">Get Started</a>
         </nav>
     </header>
 

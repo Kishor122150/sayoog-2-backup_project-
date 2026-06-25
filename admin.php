@@ -1,9 +1,9 @@
 <?php
 require_once 'config.php';
 
-if (!is_admin_logged_in()) {
-    redirect('admin-login.php');
-}
+// if (!is_admin_logged_in()) {
+//     redirect('admin-login.php');
+// }
 
 $section = sanitize($_GET['section'] ?? 'dashboard');
 $valid_sections = ['dashboard', 'users', 'products', 'cms'];
@@ -137,7 +137,7 @@ $pages = $pdo->query("SELECT * FROM cms_pages ORDER BY created_at DESC")->fetchA
         <nav class="admin-nav">
             <a href="admin.php?section=dashboard" class="<?php echo $section === 'dashboard' ? 'active' : ''; ?>">Dashboard</a>
             <a href="admin.php?section=users" class="<?php echo $section === 'users' ? 'active' : ''; ?>">Users</a>
-            <a href="admin.php?section=products" class="<?php echo $section === 'products' ? 'active' : ''; ?>">Products</a>
+            
             <a href="admin.php?section=cms" class="<?php echo $section === 'cms' ? 'active' : ''; ?>">CMS</a>
             <a href="dashboard.php">User Dashboard</a>
             <a href="logout.php" class="btn btn-secondary">Sign Out</a>
@@ -178,6 +178,58 @@ $pages = $pdo->query("SELECT * FROM cms_pages ORDER BY created_at DESC")->fetchA
                     <h3>Donations</h3>
                     <p><?php echo $donation_count; ?> total</p>
                 </div>
+
+   <!-- donations list  -->
+    <style>
+        .admin-table {
+            width: 300%;
+            border-collapse: collapse;
+                margin-top: 20px;
+        }
+        .admin-table th, .admin-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        .admin-table th {
+            background-color: #f2f2f2;
+        }
+        .admin-table h3{
+            margin-bottom: 10px;
+            text-align: left;
+        margin-top: 20px;
+        margin-left: 10px;
+           }
+    </style>
+    <div class="table-responsive admin-table">
+        <h3>Recent Donations</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Donor</th>
+                                <th>Food Item</th>
+                                <th>Quantity</th>
+                                <th>Status</th>
+                                <th>Created</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php
+                            $donations = $pdo->query("SELECT d.*, u.name AS donor_name FROM donations d JOIN users u ON d.donor_id = u.id ORDER BY d.created_at DESC LIMIT 5")->fetchAll();
+                            foreach ($donations as $donation): ?>
+                                <tr>
+                                    <td><?php echo htmlspecialchars($donation['donor_name']); ?></td>
+                                    <td><?php echo htmlspecialchars($donation['food_item']); ?></td>
+                                    <td><?php echo htmlspecialchars($donation['quantity']); ?></td>
+                                    <td><?php echo htmlspecialchars($donation['status']); ?></td>
+                                    <td><?php echo date('M d, Y', strtotime($donation['created_at'])); ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+
+
             </section>
         <?php elseif ($section === 'users'): ?>
             <section class="section-block">
@@ -192,7 +244,6 @@ $pages = $pdo->query("SELECT * FROM cms_pages ORDER BY created_at DESC")->fetchA
                             <tr>
                                 <th>Name</th>
                                 <th>Email</th>
-                                <th>Role</th>
                                 <th>Joined</th>
                                 <th>Action</th>
                             </tr>
@@ -202,20 +253,9 @@ $pages = $pdo->query("SELECT * FROM cms_pages ORDER BY created_at DESC")->fetchA
                                 <tr>
                                     <td><?php echo htmlspecialchars($user['name']); ?></td>
                                     <td><?php echo htmlspecialchars($user['email']); ?></td>
-                                    <td><?php echo htmlspecialchars($user['role']); ?></td>
                                     <td><?php echo date('M d, Y', strtotime($user['created_at'])); ?></td>
                                     <td class="table-actions">
-                                            <form action="admin.php?section=users" method="POST" class="inline-form">
-                                                <input type="hidden" name="action" value="update_user_role">
-                                                <input type="hidden" name="user_id" value="<?php echo $user['id']; ?>">
-                                                <select name="role" class="form-control form-control-inline">
-                                                    <option value="user" <?php echo $user['role'] === 'user' ? 'selected' : ''; ?>>User</option>
-                                                    <option value="admin" <?php echo $user['role'] === 'admin' ? 'selected' : ''; ?>>Admin</option>
-                                                    <option value="donor" <?php echo $user['role'] === 'donor' ? 'selected' : ''; ?>>Donor</option>
-                                                    <option value="consumer" <?php echo $user['role'] === 'consumer' ? 'selected' : ''; ?>>Consumer</option>
-                                                </select>
-                                                <button type="submit" class="btn btn-primary btn-sm">Save</button>
-                                            </form>
+                                           
                                             <form action="admin.php?section=users" method="POST" class="inline-form" onsubmit="return confirm('Delete this user?');">
                                                 <input type="hidden" name="action" value="delete_user">
                                                 <input type="hidden" name="user_id" value="<?php echo $user['id']; ?>">
@@ -228,153 +268,11 @@ $pages = $pdo->query("SELECT * FROM cms_pages ORDER BY created_at DESC")->fetchA
                     </table>
                 </div>
             </section>
-        <?php elseif ($section === 'products'): ?>
-            <section class="section-block">
-                <div class="section-heading">
-                    <h1>Manage Products</h1>
-                    <p>Create, update, or remove products shown on the public storefront.</p>
-                </div>
-
-                <div class="admin-panel-grid">
-                    <div class="panel-card">
-                        <h3>Add New Product</h3>
-                        <form action="admin.php?section=products" method="POST">
-                            <input type="hidden" name="action" value="create_product">
-                            <div class="form-group">
-                                <label>Title</label>
-                                <input type="text" name="title" class="form-control" required>
-                            </div>
-                            <div class="form-group">
-                                <label>Slug</label>
-                                <input type="text" name="slug" class="form-control" placeholder="product-slug" required>
-                            </div>
-                            <div class="form-group">
-                                <label>Description</label>
-                                <textarea name="description" class="form-control" rows="4" required></textarea>
-                            </div>
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label>Price</label>
-                                    <input type="number" step="0.01" name="price" class="form-control" value="0.00" required>
-                                </div>
-                                <div class="form-group">
-                                    <label>Status</label>
-                                    <select name="status" class="form-control">
-                                        <option value="active">Active</option>
-                                        <option value="inactive">Inactive</option>
-                                    </select>
-                                </div>
-                            </div>
-                            <div class="form-group">
-                                <label>Image path or URL</label>
-                                <input type="text" name="image_path" class="form-control" placeholder="uploads/file.jpg or https://...">
-                            </div>
-                            <button type="submit" class="btn btn-primary">Save Product</button>
-                        </form>
-                    </div>
-
-                    <div class="panel-card table-card">
-                        <h3>Existing Products</h3>
-                        <div class="table-responsive admin-table">
-                            <table>
-                                <thead>
-                                    <tr>
-                                        <th>Title</th>
-                                        <th>Slug</th>
-                                        <th>Price</th>
-                                        <th>Status</th>
-                                        <th>Action</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <?php foreach ($products as $product): ?>
-                                        <tr>
-                                            <td><?php echo htmlspecialchars($product['title']); ?></td>
-                                            <td><?php echo htmlspecialchars($product['slug']); ?></td>
-                                            <td>Rs <?php echo number_format($product['price'], 2); ?></td>
-                                            <td><?php echo htmlspecialchars($product['status']); ?></td>
-                                            <td class="table-actions">
-                                                <form action="admin.php?section=products" method="POST" style="display:inline-block;">
-                                                    <input type="hidden" name="action" value="delete_product">
-                                                    <input type="hidden" name="product_id" value="<?php echo $product['id']; ?>">
-                                                    <button type="submit" class="btn btn-secondary btn-sm">Delete</button>
-                                                </form>
-                                            </td>
-                                        </tr>
-                                    <?php endforeach; ?>
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-            </section>
+      
         <?php elseif ($section === 'cms'): ?>
             <section class="section-block">
-                <div class="section-heading">
-                    <h1>Manage CMS Pages</h1>
-                    <p>Create or edit the public website pages managed from the database.</p>
-                </div>
-
-                <div class="admin-panel-grid">
-                    <div class="panel-card">
-                        <h3>Create New Page</h3>
-                        <form action="admin.php?section=cms" method="POST">
-                            <input type="hidden" name="action" value="create_page">
-                            <div class="form-group">
-                                <label>Title</label>
-                                <input type="text" name="title" class="form-control" required>
-                            </div>
-                            <div class="form-group">
-                                <label>Slug</label>
-                                <input type="text" name="slug" class="form-control" placeholder="page-slug" required>
-                            </div>
-                            <div class="form-group">
-                                <label>Meta Description</label>
-                                <input type="text" name="meta_description" class="form-control">
-                            </div>
-                            <div class="form-group">
-                                <label>Content (HTML allowed)</label>
-                                <textarea name="content" class="form-control" rows="6" required></textarea>
-                            </div>
-                            <div class="form-group">
-                                <label><input type="checkbox" name="is_active" checked> Active</label>
-                            </div>
-                            <button type="submit" class="btn btn-primary">Save Page</button>
-                        </form>
-                    </div>
-
-                    <div class="panel-card table-card">
-                        <h3>CMS Pages</h3>
-                        <div class="table-responsive admin-table">
-                            <table>
-                                <thead>
-                                    <tr>
-                                        <th>Title</th>
-                                        <th>Slug</th>
-                                        <th>Status</th>
-                                        <th>Action</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <?php foreach ($pages as $pageItem): ?>
-                                        <tr>
-                                            <td><?php echo htmlspecialchars($pageItem['title']); ?></td>
-                                            <td><?php echo htmlspecialchars($pageItem['slug']); ?></td>
-                                            <td><?php echo $pageItem['is_active'] ? 'Active' : 'Inactive'; ?></td>
-                                            <td class="table-actions">
-                                                <form action="admin.php?section=cms" method="POST" style="display:inline-block;">
-                                                    <input type="hidden" name="action" value="delete_page">
-                                                    <input type="hidden" name="page_id" value="<?php echo $pageItem['id']; ?>">
-                                                    <button type="submit" class="btn btn-secondary btn-sm">Delete</button>
-                                                </form>
-                                            </td>
-                                        </tr>
-                                    <?php endforeach; ?>
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
+             <!-- under cms need frontend and backend code to manage cms pages, create new pages, edit existing pages, and delete pages. This will allow the admin to control the content displayed on the website, such as the home page, about us page, and contact page. The admin can also manage the meta descriptions for SEO purposes.     -->
+             
             </section>
         <?php endif; ?>
     </main>

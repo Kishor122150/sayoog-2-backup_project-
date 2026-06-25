@@ -18,27 +18,26 @@ if (isset($_POST['seed'])) {
 
         // 2. Insert test users
         // Hashed passwords:
-        // DonorPass123! -> for donor@sayog.com
-        // ConsumerPass123! -> for consumer@sayog.com
-        $donor_pwd = password_hash('DonorPass123!', PASSWORD_BCRYPT);
-        $consumer_pwd = password_hash('ConsumerPass123!', PASSWORD_BCRYPT);
+        $user_pwd = password_hash('UserPass123!', PASSWORD_BCRYPT);
+        $admin_pwd = password_hash('AdminPass123!', PASSWORD_BCRYPT);
 
         $stmt = $pdo->prepare("INSERT INTO users (name, email, address, phone, password, role) VALUES (?, ?, ?, ?, ?, ?)");
         
-        // Donors
-        $stmt->execute(['Kathmandu Bakery & Cafe', 'donor@sayog.com', 'New Baneshwor, Kathmandu', '9841122334', $donor_pwd, 'donor']);
+        // Admin
+        $stmt->execute(['System Administrator', 'admin@sayog.com', 'Admin Office', '0000000000', $admin_pwd, 'admin']);
+
+        // Users
+        $stmt->execute(['Kathmandu Bakery & Cafe', 'user1@sayog.com', 'New Baneshwor, Kathmandu', '9841122334', $user_pwd, 'user']);
         $donor1_id = $pdo->lastInsertId();
         
-        $stmt->execute(['Anupam Food Plaza', 'donor2@sayog.com', 'Battisputali, Kathmandu', '9812345678', $donor_pwd, 'donor']);
+        $stmt->execute(['Anupam Food Plaza', 'user2@sayog.com', 'Battisputali, Kathmandu', '9812345678', $user_pwd, 'user']);
         $donor2_id = $pdo->lastInsertId();
 
-        // Consumers
-        $stmt->execute(['Hope Orphanage Center', 'consumer@sayog.com', 'Balaju, Kathmandu', '014455667', $consumer_pwd, 'consumer']);
+        $stmt->execute(['Hope Orphanage Center', 'user3@sayog.com', 'Balaju, Kathmandu', '014455667', $user_pwd, 'user']);
         $consumer1_id = $pdo->lastInsertId();
 
-        $stmt->execute(['Sahaayata NGO Nepal', 'consumer2@sayog.com', 'Koteshwor, Kathmandu', '9851122334', $consumer_pwd, 'consumer']);
+        $stmt->execute(['Sahaayata NGO Nepal', 'user4@sayog.com', 'Koteshwor, Kathmandu', '9851122334', $user_pwd, 'user']);
         $consumer2_id = $pdo->lastInsertId();
-
 
         // 3. Insert test donations
         $don_stmt = $pdo->prepare("INSERT INTO donations (donor_id, food_item, quantity, expiry_time, pickup_address, phone, description, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
@@ -168,15 +167,21 @@ if (isset($_POST['seed'])) {
         <div style="background-color: var(--background); border: 1px solid var(--border); padding: 16px; border-radius: 8px; margin-bottom: 24px; font-size: 13.5px; color: var(--text-secondary);">
             <h4 style="color: var(--text-primary); margin-bottom: 8px; font-weight: 700;">Seeded Accounts Credentials:</h4>
             <div style="margin-bottom: 8px;">
-                <span class="status-badge status-available" style="padding: 2px 6px;">DONOR ACCOUNT</span>
-                <div style="margin-top: 4px;">Email: <strong>donor@sayog.com</strong></div>
-                <div>Password: <strong>DonorPass123!</strong></div>
+                <span class="status-badge" style="padding: 2px 6px; background-color: rgba(239,68,68,0.1); color:#b91c1c;">ADMIN ACCOUNT</span>
+                <div style="margin-top: 4px;">Email: <strong>admin@sayog.com</strong></div>
+                <div>Password: <strong>AdminPass123!</strong></div>
+            </div>
+            <hr style="border: 0; border-top: 1px solid var(--border); margin: 10px 0;">
+            <div style="margin-bottom: 8px;">
+                <span class="status-badge status-available" style="padding: 2px 6px;">GENERAL ACCOUNT 1</span>
+                <div style="margin-top: 4px;">Email: <strong>user1@sayog.com</strong></div>
+                <div>Password: <strong>UserPass123!</strong></div>
             </div>
             <hr style="border: 0; border-top: 1px solid var(--border); margin: 10px 0;">
             <div>
-                <span class="status-badge status-accepted" style="padding: 2px 6px; background-color: rgba(59,130,246,0.1); color:#1e40af;">CONSUMER ACCOUNT</span>
-                <div style="margin-top: 4px;">Email: <strong>consumer@sayog.com</strong></div>
-                <div>Password: <strong>ConsumerPass123!</strong></div>
+                <span class="status-badge status-accepted" style="padding: 2px 6px; background-color: rgba(59,130,246,0.1); color:#1e40af;">GENERAL ACCOUNT 2</span>
+                <div style="margin-top: 4px;">Email: <strong>user3@sayog.com</strong></div>
+                <div>Password: <strong>UserPass123!</strong></div>
             </div>
         </div>
 

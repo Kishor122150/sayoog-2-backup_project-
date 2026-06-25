@@ -2,24 +2,31 @@
 require_once 'config.php';
 
 $errors = [];
-$admin_key = '';
+$email = '';
 $flash = get_flash_message();
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $admin_key = trim($_POST['admin_key'] ?? '');
+    $email = sanitize($_POST['email'] ?? '');
+    $password = $_POST['password'] ?? '';
 
-    if (empty($admin_key)) {
-        $errors[] = 'Admin access key is required.';
+    if (empty($email)) {
+        $errors[] = 'Admin email is required.';
+    }
+    if (empty($password)) {
+        $errors[] = 'Password is required.';
     }
 
     if (empty($errors)) {
-        $admin = verify_admin_key($pdo, $admin_key);
-        if ($admin) {
+        $stmt = $pdo->prepare("SELECT * FROM users WHERE email = ? AND role = 'admin'");
+        $stmt->execute([$email]);
+        $admin = $stmt->fetch();
+
+        if ($admin && password_verify($password, $admin['password'])) {
             $_SESSION['admin_logged_in'] = true;
             $_SESSION['admin_name'] = $admin['name'];
             redirect('admin.php');
         } else {
-            $errors[] = 'Invalid admin access key.';
+            $errors[] = 'Invalid admin email or password.';
         }
     }
 }
@@ -68,8 +75,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         <form action="admin-login.php" method="POST" novalidate>
             <div class="form-group">
-                <label for="admin_key" class="form-label">Admin Access Key</label>
-                <input type="password" id="admin_key" name="admin_key" class="form-control" placeholder="Enter admin access key" value="<?php echo htmlspecialchars($admin_key); ?>" required autofocus>
+                <label for="email" class="form-label">Admin Email</label>
+                <input type="email" id="email" name="email" class="form-control" placeholder="admin@domain.com" value="<?php echo htmlspecialchars($email); ?>" required autofocus>
+            </div>
+
+            <div class="form-group">
+                <label for="password" class="form-label">Password</label>
+                <input type="password" id="password" name="password" class="form-control" placeholder="Enter admin password" required>
             </div>
 
             <button type="submit" class="btn btn-primary btn-block" style="margin-top: 10px;">
