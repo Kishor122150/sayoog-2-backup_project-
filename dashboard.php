@@ -9,16 +9,27 @@ if (!is_logged_in()) {
 $user_id = $_SESSION['user_id'];
 $user_name = $_SESSION['user_name'];
 $user_email = $_SESSION['user_email'];
-// var_dump($_SESSION);
 $user_address = $_SESSION['user_address'];
 $user_phone = $_SESSION['user_phone'];
+$user_photo = $_SESSION['user_photo'] ?? null;
+
+// Compute user initials (used in sidebar, feed, and profile page)
+$name_words = explode(" ", $user_name);
+$initials = "";
+foreach ($name_words as $w) {
+    $initials .= strtoupper(substr($w, 0, 1));
+}
+$initials = substr($initials, 0, 2);
+
+// Auto-expire past donations
+$pdo->exec("UPDATE donations SET status = 'cancelled' WHERE status IN ('available', 'requested', 'accepted') AND expiry_time < NOW()");
 
 $errors = [];
 $successes = [];
 
 // Determine active page/tab
 $page = sanitize($_GET['page'] ?? 'home');
-$valid_pages = ['home', 'create-donation', 'request-donation', 'manage-donation', 'manage-request', 'track-donation', 'track-request', 'profile', 'notifications'];
+$valid_pages = ['home', 'create-donation', 'donation_approval', 'request-donation', 'manage-donation', 'manage-request', 'track-donation', 'track-request', 'profile', 'notifications'];
 if (!in_array($page, $valid_pages)) {
     $page = 'home';
 }
@@ -122,9 +133,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if (empty($errors)) {
             try {
-                $stmt = $pdo->prepare("INSERT INTO donations (donor_id, food_item, quantity, expiry_time, pickup_address, phone, description, image_path, video_path, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'available')");
+                $stmt = $pdo->prepare("INSERT INTO donations (donor_id, food_item, quantity, expiry_time, pickup_address, phone, description, image_path, video_path, status, verification_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_review', 'pending')");
                 $stmt->execute([$user_id, $food_item, $quantity, $expiry_time, $pickup_address, $phone, $description, $image_path, $video_path]);
-                set_flash_message('success', 'Your food donation listing has been successfully posted to the feed!');
+                create_notification(
+                    $pdo,
+                    $user_id,
+                    'donation_posted',
+                    'Your food donation "' . $food_item . '" has been submitted for admin verification. It will be visible after approval.',
+                    'dashboard.php?page=donation_approval',
+                    true
+                );
+                set_flash_message('success', 'Your food donation listing has been submitted for admin verification. It will be visible after approval.');
                 redirect('dashboard.php?page=home');
             } catch (PDOException $e) {
                 $errors[] = "Failed to submit donation: " . $e->getMessage();
@@ -317,6 +336,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         redirect('dashboard.php?page=notifications');
     }
 
+    // Action: Mark Single Notification Read (AJAX)
+    if ($action === 'mark_notification_read') {
+        header('Content-Type: application/json');
+        $notif_id = intval($_POST['notification_id'] ?? 0);
+        if ($notif_id > 0) {
+            $stmt = $pdo->prepare("UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?");
+            $stmt->execute([$notif_id, $user_id]);
+            echo json_encode(['success' => true]);
+        } else {
+            echo json_encode(['success' => false]);
+        }
+        exit();
+    }
+
     // Action: Request Donation (Any user can request other users' food)
     if ($action === 'request_donation') {
         $donation_id = intval($_POST['donation_id'] ?? 0);
@@ -359,6 +392,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // Update donation status to 'requested' if it was 'available'
                 $stmt = $pdo->prepare("UPDATE donations SET status = 'requested' WHERE id = ? AND status = 'available'");
                 $stmt->execute([$donation_id]);
+
+                create_notification(
+                    $pdo,
+                    $donation['donor_id'],
+                    'request_received',
+                    'A new request was sent for "' . $donation['food_item'] . '". Please review it in your dashboard.',
+                    'dashboard.php?page=manage-donation',
+                    true
+                );
+
+                create_notification(
+                    $pdo,
+                    $user_id,
+                    'request_sent',
+                    'Your request for "' . $donation['food_item'] . '" has been sent to the donor and is waiting for review.',
+                    'dashboard.php?page=track-request',
+                    true
+                );
 
                 $pdo->commit();
                 set_flash_message('success', 'Request submitted successfully! The donor will review it.');
@@ -415,6 +466,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     true
                 );
 
+                create_notification(
+                    $pdo,
+                    $request['donor_id'],
+                    'request_accepted',
+                    'You approved a request for this donation. The requester is now waiting for pickup coordination.',
+                    'dashboard.php?page=manage-donation',
+                    true
+                );
+
                 $pdo->commit();
                 set_flash_message('success', 'Request approved! Consumer details are now open for pickup.');
                 redirect('dashboard.php?page=manage-donation');
@@ -456,6 +516,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'request_rejected',
                     'Your request for "' . $request['food_item'] . '" has been rejected.',
                     'dashboard.php?page=track-request',
+                    true
+                );
+
+                create_notification(
+                    $pdo,
+                    $request['donor_id'],
+                    'request_declined',
+                    'You declined a request for "' . $request['food_item'] . '".',
+                    'dashboard.php?page=manage-donation',
                     true
                 );
 
@@ -504,9 +573,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt = $pdo->prepare("UPDATE requests SET status = 'completed' WHERE donation_id = ? AND status = 'approved'");
                 $stmt->execute([$donation_id]);
 
+                $stmt = $pdo->prepare("SELECT consumer_id FROM requests WHERE donation_id = ? AND status = 'completed' LIMIT 1");
+                $stmt->execute([$donation_id]);
+                $requester_id = $stmt->fetchColumn();
+
+                if ($requester_id) {
+                    // Create ratings record
+                    $stmt = $pdo->prepare("INSERT IGNORE INTO ratings (donation_id, donor_id, receiver_id) VALUES (?, ?, ?)");
+                    $stmt->execute([$donation_id, $user_id, $requester_id]);
+                    
+                    create_notification(
+                        $pdo,
+                        $requester_id,
+                        'pickup_completed',
+                        'The food pickup for "' . $donation['food_item'] . '" has been completed. Please rate the donor!',
+                        'dashboard.php?page=track-request&rate_donation=' . $donation_id,
+                        true
+                    );
+                }
+                
+                // Notify donor to rate the receiver
+                create_notification(
+                    $pdo,
+                    $user_id,
+                    'pickup_verified',
+                    'Donation "' . $donation['food_item'] . '" is marked as completed. Please rate the receiver!',
+                    'dashboard.php?page=track-donation&rate_donation=' . $donation_id,
+                    true
+                );
+
                 $pdo->commit();
-                set_flash_message('success', 'Donation successfully marked as Completed! Thank you for sharing.');
-                redirect('dashboard.php?page=track-donation');
+
+                // Generate certificate of appreciation
+                $stmt_d = $pdo->prepare("SELECT d.*, u.name AS donor_name FROM donations d JOIN users u ON d.donor_id = u.id WHERE d.id = ?");
+                $stmt_d->execute([$donation_id]);
+                $don_data = $stmt_d->fetch();
+                $donor_name = $don_data['donor_name'] ?? 'Donor';
+                $food_name = $don_data['food_item'] ?? 'Food';
+                $stmt_r = $pdo->prepare("SELECT u.name FROM requests r JOIN users u ON r.consumer_id = u.id WHERE r.donation_id = ? AND r.status = 'completed' LIMIT 1");
+                $stmt_r->execute([$donation_id]);
+                $rec_name = $stmt_r->fetchColumn() ?: 'Community';
+                generate_donation_certificate($pdo, $donation_id, $donor_name, $food_name, $rec_name);
+
+                set_flash_message('success', 'Donation successfully marked as Completed! Please rate the receiver below.');
+                redirect('dashboard.php?page=track-donation&rate_donation=' . $donation_id);
             }
         } catch (PDOException $e) {
             $pdo->rollBack();
@@ -519,7 +629,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $request_id = intval($_POST['request_id'] ?? 0);
 
         try {
-            $stmt = $pdo->prepare("SELECT * FROM requests WHERE id = ? AND consumer_id = ?");
+            $stmt = $pdo->prepare("SELECT r.*, d.donor_id, d.food_item FROM requests r JOIN donations d ON r.donation_id = d.id WHERE r.id = ? AND r.consumer_id = ?");
             $stmt->execute([$request_id, $user_id]);
             $request = $stmt->fetch();
 
@@ -550,6 +660,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $stmt->execute([$request['donation_id']]);
                     }
                 }
+
+                create_notification(
+                    $pdo,
+                    $request['donor_id'],
+                    'request_cancelled',
+                    'A request for "' . $request['food_item'] . '" was cancelled by the requester.',
+                    'dashboard.php?page=manage-donation',
+                    true
+                );
 
                 $pdo->commit();
                 set_flash_message('success', 'Your request has been cancelled.');
@@ -610,6 +729,7 @@ $flash = get_flash_message();
     <link rel="stylesheet" href="style.css">
     <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="js/app.js"></script>
 </head>
 <body>
     <div class="app-container">
@@ -628,20 +748,24 @@ $flash = get_flash_message();
             <!-- Profile Info Card -->
             <div class="sidebar-profile">
                 <div class="profile-avatar">
-                    <?php 
-                        $words = explode(" ", $user_name);
-                        $initials = "";
-                        foreach ($words as $w) {
-                            $initials .= strtoupper(substr($w, 0, 1));
-                        }
-                        echo substr($initials, 0, 2);
-                    ?>
+                    <?php if (!empty($user_photo)): ?>
+                        <img src="<?php echo htmlspecialchars($user_photo); ?>" alt="Profile" style="width:100%;height:100%;border-radius:50%;object-fit:cover;">
+                    <?php else: ?>
+                        <?php echo $initials; ?>
+                    <?php endif; ?>
                 </div>
                 <div class="profile-info">
                     <div class="profile-name"><?php echo htmlspecialchars($user_name); ?></div>
                     <span class="profile-role-badge role-donor" style="background-color: rgba(16, 185, 129, 0.1); color: var(--primary);">
-                        Member
+                        <span data-i18n="sidebar.member">Member</span>
                     </span>
+                    <?php $sidebar_rating = get_user_rating($pdo, $user_id); ?>
+                    <?php if ($sidebar_rating['total_ratings'] > 0): ?>
+                        <div class="user-rating-stars" style="margin-top:2px;">
+                            <?php echo render_stars($sidebar_rating['average'], 10); ?>
+                            <span style="font-size:10px;font-weight:600;color:var(--text-muted);"><?php echo number_format($sidebar_rating['average'],1); ?> (<?php echo $sidebar_rating['total_ratings']; ?>)</span>
+                        </div>
+                    <?php endif; ?>
                 </div>
             </div>
 
@@ -649,53 +773,57 @@ $flash = get_flash_message();
             <nav class="sidebar-nav">
                 <a href="dashboard.php?page=home" class="nav-item <?php echo $page === 'home' ? 'active' : ''; ?>">
                     <i class="fa-solid fa-house-chimney"></i>
-                    <span>Home Feed</span>
+                    <span data-i18n="sidebar.home_feed">Home Feed</span>
                 </a>
 
                 <a href="dashboard.php?page=create-donation" class="nav-item <?php echo $page === 'create-donation' ? 'active' : ''; ?>">
                     <i class="fa-solid fa-circle-plus"></i>
-                    <span>Create Donation</span>
+                    <span data-i18n="sidebar.create_donation">Create Donation</span>
+                </a>
+
+                <a href="dashboard.php?page=donation_approval" class="nav-item <?php echo $page === 'donation_approval' ? 'active' : ''; ?>">
+                    <i class="fa-solid fa-clipboard-check"></i>
+                    <span data-i18n="sidebar.approval_tracking">Approval Tracking</span>
                 </a>
 
                 <a href="dashboard.php?page=request-donation" class="nav-item <?php echo $page === 'request-donation' ? 'active' : ''; ?>">
                     <i class="fa-solid fa-hand-holding-hand"></i>
-                    <span>Request Food</span>
+                    <span data-i18n="sidebar.request_food">Request Food</span>
                 </a>
 
                 <a href="dashboard.php?page=manage-donation" class="nav-item <?php echo $page === 'manage-donation' ? 'active' : ''; ?>">
                     <i class="fa-solid fa-list-check"></i>
-                    <!-- <span>Manage Donation</span> -->
-                         <span>Manage incoming Request</span>
+                    <span data-i18n="sidebar.manage_incoming">Manage incoming Request</span>
                 </a>
 
                 <a href="dashboard.php?page=manage-request" class="nav-item <?php echo $page === 'manage-request' ? 'active' : ''; ?>">
                     <i class="fa-solid fa-file-invoice"></i>
-                    <span>Our Requests</span>
+                    <span data-i18n="sidebar.our_requests">Our Requests</span>
                 </a>
 
                 <a href="dashboard.php?page=track-donation" class="nav-item <?php echo $page === 'track-donation' ? 'active' : ''; ?>">
                     <i class="fa-solid fa-map-location-dot"></i>
-                    <span>Track our Donations</span>
+                    <span data-i18n="sidebar.track_donations">Track our Donations</span>
                 </a>
 
                 <a href="dashboard.php?page=track-request" class="nav-item <?php echo $page === 'track-request' ? 'active' : ''; ?>">
                     <i class="fa-solid fa-route"></i>
-                    <span>Track our Requests</span>
+                    <span data-i18n="sidebar.track_requests">Track our Requests</span>
                 </a>
 
                 <a href="dashboard.php?page=notifications" class="nav-item <?php echo $page === 'notifications' ? 'active' : ''; ?>">
                     <i class="fa-solid fa-bell"></i>
-                    <span>Notifications</span>
+                    <span data-i18n="sidebar.notifications">Notifications</span>
                 </a>
 
                 <a href="dashboard.php?page=profile" class="nav-item <?php echo $page === 'profile' ? 'active' : ''; ?>">
                     <i class="fa-solid fa-user-gear"></i>
-                    <span>My Profile</span>
+                    <span data-i18n="sidebar.my_profile">My Profile</span>
                 </a>
 
                 <a href="logout.php" class="nav-item nav-item-logout">
                     <i class="fa-solid fa-right-from-bracket"></i>
-                    <span>Log Out</span>
+                    <span data-i18n="sidebar.logout">Log Out</span>
                 </a>
             </nav>
         </aside>
@@ -713,6 +841,7 @@ $flash = get_flash_message();
                             switch ($page) {
                                 case 'home': echo "Platform Feed"; break;
                                 case 'create-donation': echo "Create New Donation"; break;
+                                case 'donation_approval': echo "Donation Approval Tracking"; break;
                                 case 'request-donation': echo "Request Food Donations"; break;
                                 case 'manage-donation': echo "Manage Donation Requests"; break;
                                 case 'manage-request': echo "Manage Your Food Requests"; break;
@@ -733,14 +862,11 @@ $flash = get_flash_message();
                     </a>
 
                     <script>
-                        // Live badge refresh (no code changes in other UI)
                         (function () {
                             const link = document.querySelector('.header-notifications');
                             if (!link) return;
 
-                            // Poll every 5s to update unread count without page reload
                             const badge = link.querySelector('.notification-badge');
-                            if (!badge) return;
 
                             async function refreshBadge() {
                                 try {
@@ -750,15 +876,23 @@ $flash = get_flash_message();
                                     const count = Number(data.count || 0);
                                     badge.textContent = count;
                                     badge.style.display = count > 0 ? 'inline-flex' : 'none';
+                                    link.setAttribute('aria-label', count > 0 ? `Notifications (${count} unread)` : 'Notifications');
                                 } catch (e) {
                                     // ignore
                                 }
                             }
 
+                            window.refreshNotifBadge = refreshBadge;
                             refreshBadge();
                             setInterval(refreshBadge, 5000);
                         })();
                     </script>
+                    <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+                        <i class="fa-solid fa-moon"></i>
+                    </button>
+                    <button class="lang-toggle" onclick="toggleLanguage()" style="background:rgba(59,130,246,0.1);">
+                        <span>नेपाली</span>
+                    </button>
                     <div style="font-size: 13.5px; font-weight: 600; color: var(--text-secondary);">
                         <i class="fa-solid fa-calendar-day" style="margin-right: 4px; color: var(--primary);"></i>
                         Today: <?php echo date('M d, Y'); ?>
@@ -812,8 +946,8 @@ $flash = get_flash_message();
                 // =============================================================
                 if ($page === 'home') {
                     // Fetch counts for overview cards (Unified statistics)
-                    $total_active = $pdo->query("SELECT COUNT(*) FROM donations WHERE status = 'available' OR status = 'requested'")->fetchColumn();
-                    $total_completed = $pdo->query("SELECT COUNT(*) FROM donations WHERE status = 'completed'")->fetchColumn();
+                    $total_active = $pdo->query("SELECT COUNT(*) FROM donations WHERE verification_status = 'approved' AND (status = 'available' OR status = 'requested')")->fetchColumn();
+                    $total_completed = $pdo->query("SELECT COUNT(*) FROM donations WHERE verification_status = 'approved' AND status = 'completed'")->fetchColumn();
                     
                     // User active donations posted
                     $my_listings_stmt = $pdo->prepare("SELECT COUNT(*) FROM donations WHERE donor_id = ? AND status != 'completed' AND status != 'cancelled'");
@@ -857,6 +991,92 @@ $flash = get_flash_message();
                         </div>
                     </div>
 
+                    <?php
+                    // --- Smart Recommendations Engine ---
+                    $recommendations = get_recommendations($pdo, $user_id, $user_address, 8);
+                    if (!empty($recommendations)): ?>
+                    <div class="recommendations-section">
+                        <div class="recommendations-header">
+                            <div class="recommendations-header-left">
+                                <div class="rec-icon">
+                                    <i class="fa-solid fa-lightbulb"></i>
+                                </div>
+                                <h2>Recommended For You</h2>
+                                <span class="rec-badge"><i class="fa-solid fa-sparkles"></i> AI</span>
+                            </div>
+                            <a href="dashboard.php?page=request-donation" class="rec-view-all">
+                                View all <i class="fa-solid fa-arrow-right"></i>
+                            </a>
+                        </div>
+                        <div class="recommendations-scroll" id="recScroll">
+                            <?php foreach ($recommendations as $rec):
+                                $d = $rec['donation'];
+                                $score = $rec['score'];
+                                $reasons = $rec['reasons'];
+                                ?>
+                            <div class="rec-card">
+                                <div class="rec-card-image">
+                                    <?php if (!empty($d['image_path'])): ?>
+                                        <img src="<?php echo htmlspecialchars($d['image_path']); ?>" alt="<?php echo htmlspecialchars($d['food_item']); ?>">
+                                    <?php else: ?>
+                                        <div class="rec-placeholder">
+                                            <i class="fa-solid fa-utensils"></i>
+                                        </div>
+                                    <?php endif; ?>
+                                    <div class="rec-card-score">
+                                        <i class="fa-solid fa-star"></i> <?php echo $score; ?>
+                                    </div>
+                                </div>
+                                <div class="rec-card-body">
+                                    <h3 title="<?php echo htmlspecialchars($d['food_item']); ?>"><?php echo htmlspecialchars($d['food_item']); ?></h3>
+                                    <div class="rec-card-donor">
+                                        <i class="fa-solid fa-user"></i> <?php echo htmlspecialchars($d['donor_name']); ?>
+                                    </div>
+                                    <div class="rec-card-meta">
+                                        <span><i class="fa-solid fa-boxes-stacked"></i> <?php echo htmlspecialchars($d['quantity']); ?></span>
+                                        <span><i class="fa-solid fa-map-pin"></i> <?php echo htmlspecialchars(explode(',', $d['pickup_address'])[0]); ?></span>
+                                    </div>
+                                    <?php if (!empty($reasons)): ?>
+                                    <div class="rec-card-reasons">
+                                        <?php foreach ($reasons as $r): ?>
+                                            <span class="rec-reason rec-reason-<?php echo $r; ?>">
+                                                <?php if ($r === 'nearby'): ?>
+                                                    <i class="fa-solid fa-location-dot"></i> Nearby
+                                                <?php elseif ($r === 'history'): ?>
+                                                    <i class="fa-solid fa-clock-rotate-left"></i> Matches history
+                                                <?php elseif ($r === 'popular'): ?>
+                                                    <i class="fa-solid fa-fire"></i> Popular
+                                                <?php elseif ($r === 'urgent'): ?>
+                                                    <i class="fa-solid fa-clock"></i> Expiring soon
+                                                <?php endif; ?>
+                                            </span>
+                                        <?php endforeach; ?>
+                                    </div>
+                                    <?php endif; ?>
+                                </div>
+                                <div class="rec-card-footer">
+                                    <a href="donation.php?id=<?php echo $d['id']; ?>" class="btn btn-primary">
+                                        <i class="fa-solid fa-eye"></i> View
+                                    </a>
+                                    <?php
+                                    $check_req = $pdo->prepare("SELECT id FROM requests WHERE donation_id = ? AND consumer_id = ? AND status = 'pending'");
+                                    $check_req->execute([$d['id'], $user_id]);
+                                    $has_requested = (bool)$check_req->fetch();
+                                    ?>
+                                    <?php if ($has_requested): ?>
+                                        <span class="btn btn-secondary" style="flex:0;"><i class="fa-solid fa-circle-check" style="color:var(--primary);"></i></span>
+                                    <?php else: ?>
+                                        <a href="dashboard.php?page=request-donation" class="btn btn-outline">
+                                            <i class="fa-solid fa-hand-holding-hand"></i> Request
+                                        </a>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+                            <?php endforeach; ?>
+                        </div>
+                    </div>
+                    <?php endif; ?>
+
                     <div class="home-toolbar">
                         <div class="home-search">
                             <i class="fa-solid fa-magnifying-glass"></i>
@@ -872,13 +1092,13 @@ $flash = get_flash_message();
                     </div>
 
                     <!-- Feed Composer Trigger (Facebook Style - visible to all users) -->
-                    <div class="post-creator-card" style="max-width: 680px; margin: 0 auto 24px auto;">
+                    <div class="post-creator-card" style="max-width: px; margin: 0 auto 24px auto;">
                         <div class="post-creator-header">
                             <div class="profile-avatar" style="width: 38px; height: 38px; font-size: 13px;">
                                 <?php echo substr($initials, 0, 2); ?>
                             </div>
                             <div class="post-creator-trigger" onclick="location.href='dashboard.php?page=create-donation'">
-                                What surplus food would you like to donate today, <?php echo htmlspecialchars(explode(" ", $user_name)[0]); ?>?
+                               Add Donations <?php echo htmlspecialchars(explode(" ", $user_name)[0]); ?>?
                             </div>
                         </div>
                     </div>
@@ -890,11 +1110,12 @@ $flash = get_flash_message();
                         </h2>
                         
                         <?php
-                        // Fetch all posts sorted by newest
+                        // Fetch all posts sorted by newest, but only show approved donations
                         $feed_stmt = $pdo->prepare("
                             SELECT d.*, u.name AS donor_name, u.address AS donor_default_address
                             FROM donations d 
                             JOIN users u ON d.donor_id = u.id 
+                            WHERE d.verification_status = 'approved'
                             ORDER BY d.created_at DESC
                         ");
                         $feed_stmt->execute();
@@ -974,7 +1195,7 @@ $flash = get_flash_message();
                                             </div>
                                             <div class="detail-item">
                                                 <i class="fa-solid fa-hourglass-half"></i>
-                                                <span><strong>Consume Before:</strong> <?php echo date('M d, Y h:i A', strtotime($post['expiry_time'])); ?></span>
+                                                <span><strong>Consume Before:</strong> <span class="countdown-badge" data-expiry="<?php echo $post['expiry_time']; ?>">⏳ Loading...</span></span>
                                             </div>
                                             <div class="detail-item" style="grid-column: span 2;">
                                                 <i class="fa-solid fa-map-pin"></i>
@@ -985,6 +1206,14 @@ $flash = get_flash_message();
                                                     <i class="fa-solid fa-phone"></i>
                                                     <span><strong>Contact Phone:</strong> <?php echo htmlspecialchars($post['phone']); ?></span>
                                                 </div>
+                                                <?php if (!empty($post['phone'])): ?>
+                                                    <div class="detail-item">
+                                                        <i class="fa-brands fa-whatsapp" style="color:#25d366;"></i>
+                                                        <a href="<?php echo get_whatsapp_link($post['phone'], 'Hello ' . $post['donor_name'] . ', I am interested in: ' . $post['food_item']); ?>" target="_blank" class="whatsapp-chip">
+                                                            <i class="fa-brands fa-whatsapp"></i> Chat on WhatsApp
+                                                        </a>
+                                                    </div>
+                                                <?php endif; ?>
                                             <?php endif; ?>
                                         </div>
                                     </div>
@@ -1162,7 +1391,7 @@ $flash = get_flash_message();
                                                 <h3 class="feed-food-title"><?php echo htmlspecialchars($donation['food_item']); ?></h3>
                                                 <div class="feed-food-details">
                                                     <div class="detail-item"><i class="fa-solid fa-boxes-stacked"></i><span><strong>Quantity:</strong> <?php echo htmlspecialchars($donation['quantity']); ?></span></div>
-                                                    <div class="detail-item"><i class="fa-solid fa-hourglass-half"></i><span><strong>Consume Before:</strong> <?php echo date('M d, Y h:i A', strtotime($donation['expiry_time'])); ?></span></div>
+                                                    <div class="detail-item"><i class="fa-solid fa-hourglass-half"></i><span><strong>Consume Before:</strong> <span class="countdown-badge" data-expiry="<?php echo $donation['expiry_time']; ?>">⏳ Loading...</span></span></div>
                                                     <div class="detail-item" style="grid-column: span 2;"><i class="fa-solid fa-map-pin"></i><span><strong>Pickup:</strong> <?php echo htmlspecialchars($donation['pickup_address']); ?></span></div>
                                                 </div>
                                             </div>
@@ -1174,7 +1403,7 @@ $flash = get_flash_message();
                                                     <form action="dashboard.php?page=create-donation" method="POST" style="display:inline; margin:0;">
                                                         <input type="hidden" name="action" value="toggle_donation_status">
                                                         <input type="hidden" name="donation_id" value="<?php echo $donation['id']; ?>">
-                                                        <button type="submit" class="btn btn-secondary" style="background: <?php echo $donation['status'] === 'available' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)'; ?>; color: <?php echo $donation['status'] === 'available' ? '#b91c1c' : '#0f766e'; ?>;">
+                                                        <button type="submit" class="btn btn-toggle <?php echo $donation['status'] === 'available' ? 'inactive' : ''; ?>">
                                                             <i class="fa-solid <?php echo $donation['status'] === 'available' ? 'fa-toggle-off' : 'fa-toggle-on'; ?>"></i>
                                                             <?php echo $donation['status'] === 'available' ? 'Inactivate' : 'Activate'; ?>
                                                         </button>
@@ -1331,6 +1560,85 @@ $flash = get_flash_message();
 
                 <?php
                 // =============================================================
+                // TAB: DONATION APPROVAL TRACKING
+                // =============================================================
+                } elseif ($page === 'donation_approval') {
+                    $approval_stmt = $pdo->prepare("SELECT d.*, u.name AS donor_name FROM donations d JOIN users u ON d.donor_id = u.id WHERE d.donor_id = ? ORDER BY d.created_at DESC");
+                    $approval_stmt->execute([$user_id]);
+                    $approval_donations = $approval_stmt->fetchAll();
+                    ?>
+                    <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 20px;">
+                        <div>
+                            <h2 style="font-size: 22px; font-weight: 800; margin-bottom: 6px; color: var(--text-primary);">Donation Approval Tracking</h2>
+                            <p style="margin: 0; color: var(--text-secondary);">Monitor every donation you submitted for admin verification and see whether it is pending, approved, or rejected.</p>
+                        </div>
+                        <a href="dashboard.php?page=create-donation" class="btn btn-primary">
+                            <i class="fa-solid fa-circle-plus"></i> Add Another Donation
+                        </a>
+                    </div>
+
+                    <?php if (empty($approval_donations)): ?>
+                        <div class="empty-state">
+                            <i class="fa-solid fa-clipboard-check"></i>
+                            <h3>No submissions found</h3>
+                            <p>Your donations will appear here after you submit them for admin review.</p>
+                        </div>
+                    <?php else: ?>
+                        <div class="feed-container">
+                            <?php foreach ($approval_donations as $donation): 
+                                $review_status = $donation['verification_status'] ?? 'pending';
+                                $badge_style = 'background: rgba(59, 130, 246, 0.12); color: #1d4ed8;';
+                                if ($review_status === 'approved') {
+                                    $badge_style = 'background: rgba(16, 185, 129, 0.12); color: #047857;';
+                                } elseif ($review_status === 'rejected') {
+                                    $badge_style = 'background: rgba(239, 68, 68, 0.12); color: #b91c1c;';
+                                }
+                                ?>
+                                <div class="feed-card" style="margin-bottom: 16px;">
+                                    <div class="feed-card-header">
+                                        <div class="feed-user-avatar" style="background: linear-gradient(135deg, var(--primary) 0%, #0d9488 100%);">
+                                            <?php echo strtoupper(substr($donation['donor_name'] ?? 'You', 0, 2)); ?>
+                                        </div>
+                                        <div class="feed-header-info">
+                                            <div class="feed-user-name"><?php echo htmlspecialchars($donation['food_item']); ?></div>
+                                            <div class="feed-post-meta"><span>Submitted <?php echo date('M d, Y h:i A', strtotime($donation['created_at'])); ?></span></div>
+                                        </div>
+                                        <div>
+                                            <span class="status-badge" style="<?php echo $badge_style; ?>">
+                                                <?php echo ucfirst($review_status); ?>
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <div class="feed-card-body">
+                                        <div class="feed-food-details">
+                                            <div class="detail-item"><i class="fa-solid fa-boxes-stacked"></i><span><strong>Quantity:</strong> <?php echo htmlspecialchars($donation['quantity']); ?></span></div>
+                                            <div class="detail-item"><i class="fa-solid fa-hourglass-half"></i><span><strong>Expires:</strong> <span class="countdown-badge" data-expiry="<?php echo $donation['expiry_time']; ?>">⏳ Loading...</span></span></div>
+                                            <div class="detail-item" style="grid-column: span 2;"><i class="fa-solid fa-map-pin"></i><span><strong>Pickup:</strong> <?php echo htmlspecialchars($donation['pickup_address']); ?></span></div>
+                                        </div>
+                                        <div style="margin-top: 14px; padding: 12px 14px; background: var(--background); border-radius: 8px;">
+                                            <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 8px; font-size: 13px; color: var(--text-secondary);">
+                                                <span><strong>Current status:</strong> <?php echo htmlspecialchars($donation['status']); ?></span>
+                                                <span><strong>Phone:</strong> <?php echo htmlspecialchars($donation['phone']); ?></span>
+                                            </div>
+                                            <?php if (!empty($donation['description'])): ?>
+                                                <p style="margin: 0 0 8px; color: var(--text-secondary);"><strong>Details:</strong> <?php echo htmlspecialchars($donation['description']); ?></p>
+                                            <?php endif; ?>
+                                            <?php if (!empty($donation['verification_note'])): ?>
+                                                <p style="margin: 0; color: var(--text-secondary);"><strong>Admin note:</strong> <?php echo htmlspecialchars($donation['verification_note']); ?></p>
+                                            <?php else: ?>
+                                                <p style="margin: 0; color: var(--text-secondary);">
+                                                    <?php if ($review_status === 'pending') { echo 'Your donation is waiting for admin verification before it becomes publicly visible.'; } elseif ($review_status === 'approved') { echo 'This donation has been approved and is now live on the public listings.'; } else { echo 'This donation was reviewed and rejected by the admin team.'; } ?>
+                                                </p>
+                                            <?php endif; ?>
+                                        </div>
+                                    </div>
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
+                    <?php endif; ?>
+
+                <?php
+                // =============================================================
                 // TAB: REQUEST DONATION (Catalog of others' available foods)
                 // =============================================================
                 } elseif ($page === 'request-donation') {
@@ -1351,7 +1659,7 @@ $flash = get_flash_message();
                         SELECT d.*, u.name AS donor_name
                         FROM donations d 
                         JOIN users u ON d.donor_id = u.id 
-                        WHERE d.status IN ('available', 'requested') AND d.donor_id != ?
+                        WHERE d.verification_status = 'approved' AND d.status IN ('available', 'requested') AND d.donor_id != ?
                         ORDER BY d.created_at DESC
                     ");
                     $catalog_stmt->execute([$user_id]);
@@ -1398,7 +1706,7 @@ $flash = get_flash_message();
                                             </div>
                                             <div style="display: flex; align-items: center; gap: 6px; color: var(--text-secondary);">
                                                 <i class="fa-solid fa-hourglass-half" style="color: var(--primary); width: 14px;"></i>
-                                                <span>Exp: <?php echo date('M d, Y h:i A', strtotime($card['expiry_time'])); ?></span>
+                                                <span>Exp: <span class="countdown-badge" data-expiry="<?php echo $card['expiry_time']; ?>">⏳ Loading...</span></span>
                                             </div>
                                             <div style="display: flex; align-items: center; gap: 6px; color: var(--text-secondary);">
                                                 <i class="fa-solid fa-map-pin" style="color: var(--primary); width: 14px;"></i>
@@ -1581,6 +1889,13 @@ $flash = get_flash_message();
                                                 <div style="font-size: 11.5px; color: var(--text-secondary); margin-top: 2px;">
                                                     <i class="fa-solid fa-phone" style="font-size: 10px; margin-right: 3px;"></i> <?php echo htmlspecialchars($req['consumer_phone']); ?>
                                                 </div>
+                                                <?php if (!empty($req['consumer_phone'])): ?>
+                                                    <div style="margin-top: 4px;">
+                                                        <a href="<?php echo get_whatsapp_link($req['consumer_phone'], 'Hello ' . $req['consumer_name'] . ', I am messaging you regarding a food donation request on Sayog.'); ?>" target="_blank" class="whatsapp-chip">
+                                                            <i class="fa-brands fa-whatsapp"></i> Chat on WhatsApp
+                                                        </a>
+                                                    </div>
+                                                <?php endif; ?>
                                                 <div style="font-size: 11.5px; color: var(--text-secondary);">
                                                     <i class="fa-solid fa-map-pin" style="font-size: 10px; margin-right: 3px;"></i> <?php echo htmlspecialchars($req['consumer_address']); ?>
                                                 </div>
@@ -1692,6 +2007,13 @@ $flash = get_flash_message();
                                                     <div style="font-size: 11.5px; color: var(--text-secondary); margin-top: 2px;">
                                                         <i class="fa-solid fa-phone" style="font-size: 10px; margin-right: 3px;"></i> <?php echo htmlspecialchars($req['donor_phone']); ?>
                                                     </div>
+                                                    <?php if (!empty($req['donor_phone'])): ?>
+                                                        <div style="margin-top: 4px;">
+                                                            <a href="<?php echo get_whatsapp_link($req['donor_phone'], 'Hello ' . $req['donor_name'] . ', I am following up on my food donation request on Sayog.'); ?>" target="_blank" class="whatsapp-chip">
+                                                                <i class="fa-brands fa-whatsapp"></i> Chat on WhatsApp
+                                                            </a>
+                                                        </div>
+                                                    <?php endif; ?>
                                                 <?php else: ?>
                                                     <div style="font-size: 11px; color: var(--text-muted); font-style: italic; margin-top: 2px;">Phone unlocked upon approval</div>
                                                 <?php endif; ?>
@@ -1768,13 +2090,13 @@ $flash = get_flash_message();
                                 $bar_width = '0%';
                             } elseif ($don['status'] === 'requested') {
                                 $step = 2;
-                                $bar_width = '33%';
+                                $bar_width = '25%';
                             } elseif ($don['status'] === 'accepted') {
                                 $step = 3;
-                                $bar_width = '66%';
+                                $bar_width = '50%';
                             } elseif ($don['status'] === 'completed') {
                                 $step = 4;
-                                $bar_width = '100%';
+                                $bar_width = '75%';
                             }
                             ?>
                             <div class="timeline-card">
@@ -1836,13 +2158,66 @@ $flash = get_flash_message();
                                             <?php endif; ?>
                                         </div>
                                         <?php if ($don['status'] === 'accepted'): ?>
-                                            <form action="dashboard.php?page=track-donation" method="POST" style="display:inline;">
-                                                <input type="hidden" name="action" value="complete_donation">
-                                                <input type="hidden" name="donation_id" value="<?php echo $don['id']; ?>">
-                                                <button type="submit" class="btn btn-primary" style="padding: 5px 10px; font-size: 11.5px; background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);">
-                                                    Mark as Picked Up
-                                                </button>
-                                            </form>
+                                            <?php $qr_token_td = get_or_create_qr_token($pdo, $don['id']); ?>
+                                            <div style="margin-top:14px;padding:14px;background:var(--background);border-radius:10px;text-align:center;">
+                                                <div style="font-size:12px;font-weight:700;margin-bottom:6px;color:var(--text-primary);">
+                                                    <i class="fa-solid fa-qrcode" style="color:var(--primary);"></i> QR Pickup Verification
+                                                </div>
+                                                <img src="<?php echo htmlspecialchars(get_qr_image_url($qr_token_td, 150)); ?>" alt="QR" style="width:110px;height:110px;border:2px solid var(--border);border-radius:10px;padding:4px;background:#fff;display:inline-block;">
+                                                <div style="margin-top:8px;display:flex;gap:6px;justify-content:center;flex-wrap:wrap;">
+                                                    <a href="qr-scan.php?token=<?php echo urlencode($qr_token_td); ?>" target="_blank" class="btn btn-outline" style="padding:6px 12px;font-size:11.5px;">
+                                                        <i class="fa-solid fa-qrcode"></i> Scan QR to Verify
+                                                    </a>
+                                                    <form action="dashboard.php?page=track-donation" method="POST" style="display:inline;margin:0;">
+                                                        <input type="hidden" name="action" value="complete_donation">
+                                                        <input type="hidden" name="donation_id" value="<?php echo $don['id']; ?>">
+                                                        <button type="submit" class="btn btn-primary" style="padding:6px 12px;font-size:11.5px;">
+                                                            <i class="fa-solid fa-truck-ramp-box"></i> Picked Up
+                                                        </button>
+                                                    </form>
+                                                </div>
+                                            </div>
+                                        <?php elseif ($don['status'] === 'completed'): ?>
+                                                <i class="fa-solid fa-heart" style="color: var(--primary);"></i> Completed successfully! The food was claimed and picked up.
+                                                <?php if (!empty($don['certificate_path'])): ?>
+                                                    <a href="<?php echo htmlspecialchars($don['certificate_path']); ?>" target="_blank" class="btn btn-success" style="padding:6px 14px;font-size:12px;margin-top:8px;display:inline-flex;align-items:center;gap:6px;">
+                                                        <i class="fa-solid fa-file-pdf"></i> View Certificate
+                                                    </a>
+                                                <?php endif; ?>
+                                            <?php
+                                            $rate_don_td = intval($_GET['rate_donation'] ?? 0);
+                                            if ($rate_don_td === $don['id']):
+                                                $ratings_ck = $pdo->prepare("SELECT * FROM ratings WHERE donation_id = ?");
+                                                $ratings_ck->execute([$don['id']]);
+                                                $rt_rec = $ratings_ck->fetch();
+                                                if (!$rt_rec || empty($rt_rec['rating_receiver'])):
+                                        ?>
+                                            <div class="rating-prompt-card" style="margin-top:14px;">
+                                                <h4><i class="fa-solid fa-star"></i> Rate the Receiver</h4>
+                                                <p>How was your experience with <strong><?php echo htmlspecialchars($don['approved_consumer_name'] ?: 'the receiver'); ?></strong>?</p>
+                                                <form action="qr-scan.php" method="POST">
+                                                    <input type="hidden" name="action" value="submit_rating">
+                                                    <input type="hidden" name="donation_id" value="<?php echo $don['id']; ?>">
+                                                    <input type="hidden" name="role" value="receiver">
+                                                    <div class="rating-stars-input">
+                                                        <input type="radio" name="rating" value="5" id="rd5-<?php echo $don['id']; ?>" required><label for="rd5-<?php echo $don['id']; ?>"><i class="fa-solid fa-star"></i></label>
+                                                        <input type="radio" name="rating" value="4" id="rd4-<?php echo $don['id']; ?>"><label for="rd4-<?php echo $don['id']; ?>"><i class="fa-solid fa-star"></i></label>
+                                                        <input type="radio" name="rating" value="3" id="rd3-<?php echo $don['id']; ?>"><label for="rd3-<?php echo $don['id']; ?>"><i class="fa-solid fa-star"></i></label>
+                                                        <input type="radio" name="rating" value="2" id="rd2-<?php echo $don['id']; ?>"><label for="rd2-<?php echo $don['id']; ?>"><i class="fa-solid fa-star"></i></label>
+                                                        <input type="radio" name="rating" value="1" id="rd1-<?php echo $don['id']; ?>"><label for="rd1-<?php echo $don['id']; ?>"><i class="fa-solid fa-star"></i></label>
+                                                    </div>
+                                                    <div class="rating-form-group" style="margin-top:8px;">
+                                                        <label style="font-size:12px;">Review (Optional)</label>
+                                                        <textarea name="review" class="form-control" rows="2" placeholder="Share your experience about the receiver..." style="font-size:13px;"></textarea>
+                                                    </div>
+                                                    <button type="submit" class="btn btn-primary" style="margin-top:8px;padding:8px 16px;font-size:13px;"><i class="fa-solid fa-paper-plane"></i> Submit Rating</button>
+                                                </form>
+                                            </div>
+                                        <?php else: ?>
+                                            <div style="margin-top:12px;font-size:13px;color:var(--text-muted);text-align:center;">
+                                                <i class="fa-solid fa-circle-check" style="color:var(--primary);"></i> You rated this receiver <?php echo !empty($rt_rec['rating_receiver']) ? render_stars($rt_rec['rating_receiver'], 12) : ''; ?>
+                                            </div>
+                                        <?php endif; endif; ?>
                                         <?php endif; ?>
                                     </div>
                                 <?php endif; ?>
@@ -1888,10 +2263,10 @@ $flash = get_flash_message();
                                 $bar_width = '0%';
                             } elseif ($req['status'] === 'approved') {
                                 $step = 2;
-                                $bar_width = '50%';
+                                $bar_width = '33.3%';
                             } elseif ($req['status'] === 'completed') {
                                 $step = 3;
-                                $bar_width = '100%';
+                                $bar_width = '66.6%';
                             }
                             ?>
                             <div class="timeline-card">
@@ -1920,7 +2295,7 @@ $flash = get_flash_message();
                                         <i class="fa-solid fa-circle-xmark" style="margin-right: 6px;"></i> This request was declined by the donor.
                                     </div>
                                 <?php else: ?>
-                                    <div class="timeline-tracker" style="max-width: 500px; margin-left: auto; margin-right: auto;">
+                                    <div class="timeline-tracker timeline-tracker-request" style="max-width: 500px; margin-left: auto; margin-right: auto;">
                                         <div class="timeline-progress-bar" style="width: <?php echo $bar_width; ?>;"></div>
                                         
                                         <div class="timeline-step <?php echo $step >= 1 ? 'completed' : ''; ?> <?php echo $step === 1 ? 'active' : ''; ?>">
@@ -1945,8 +2320,60 @@ $flash = get_flash_message();
                                                 <i class="fa-solid fa-clock" style="color: var(--status-pending);"></i> Request is pending review by the donor: <strong><?php echo htmlspecialchars($req['donor_name']); ?></strong>.
                                             <?php elseif ($req['status'] === 'approved'): ?>
                                                 <i class="fa-solid fa-phone-volume" style="color: var(--primary);"></i> <strong>Approved!</strong> Please coordinate pickup at: <strong><?php echo htmlspecialchars($req['pickup_address']); ?></strong>. Contact: <strong><?php echo htmlspecialchars($req['donor_phone']); ?></strong>.
+                                                <?php if (!empty($req['donor_phone'])): ?>
+                                                    <div style="margin-top: 8px;">
+                                                        <a href="<?php echo get_whatsapp_link($req['donor_phone'], 'Hello ' . $req['donor_name'] . ', I am contacting you regarding the approved food donation pickup on Sayog.'); ?>" target="_blank" class="btn btn-whatsapp btn-whatsapp-sm">
+                                                            <i class="fa-brands fa-whatsapp"></i> Chat on WhatsApp
+                                                        </a>
+                                                    </div>
+                                                <?php endif; ?>
+                                                <?php $qr_token_tr = get_or_create_qr_token($pdo, $req['donation_id']); ?>
+                                                <div style="margin-top:12px;padding:12px;background:var(--background);border-radius:8px;text-align:center;width:100%;">
+                                                    <div style="font-size:12px;font-weight:700;margin-bottom:4px;color:var(--text-primary);">
+                                                        <i class="fa-solid fa-qrcode" style="color:var(--primary);"></i> Your Pickup QR Code
+                                                    </div>
+                                                    <p style="font-size:10px;color:var(--text-muted);margin:0 0 8px;">Show this to the donor at pickup</p>
+                                                    <img src="<?php echo htmlspecialchars(get_qr_image_url($qr_token_tr, 150)); ?>" alt="QR" style="width:100px;height:100px;border:2px solid var(--border);border-radius:8px;padding:4px;background:#fff;display:inline-block;">
+                                                    <a href="qr-scan.php?token=<?php echo urlencode($qr_token_tr); ?>" target="_blank" style="display:block;margin-top:6px;font-size:11px;color:var(--primary);font-weight:600;text-decoration:none;">
+                                                        <i class="fa-solid fa-external-link-alt"></i> Open Verification Page
+                                                    </a>
+                                                </div>
                                             <?php elseif ($req['status'] === 'completed'): ?>
                                                 <i class="fa-solid fa-face-smile" style="color: var(--primary);"></i> Food pickup completed. Thank you for utilizing surplus food!
+                                                <?php
+                                                $rate_don_tr = intval($_GET['rate_donation'] ?? 0);
+                                                if ($rate_don_tr === $req['donation_id']):
+                                                    $ratings_tr = $pdo->prepare("SELECT * FROM ratings WHERE donation_id = ?");
+                                                    $ratings_tr->execute([$req['donation_id']]);
+                                                    $rtr = $ratings_tr->fetch();
+                                                    if (!$rtr || empty($rtr['rating_donor'])):
+                                                ?>
+                                                <div class="rating-prompt-card" style="margin-top:12px;">
+                                                    <h4><i class="fa-solid fa-star"></i> Rate the Donor</h4>
+                                                    <p>How was your experience with <strong><?php echo htmlspecialchars($req['donor_name']); ?></strong>?</p>
+                                                    <form action="qr-scan.php" method="POST">
+                                                        <input type="hidden" name="action" value="submit_rating">
+                                                        <input type="hidden" name="donation_id" value="<?php echo $req['donation_id']; ?>">
+                                                        <input type="hidden" name="role" value="donor">
+                                                        <div class="rating-stars-input">
+                                                            <input type="radio" name="rating" value="5" id="rq5-<?php echo $req['donation_id']; ?>" required><label for="rq5-<?php echo $req['donation_id']; ?>"><i class="fa-solid fa-star"></i></label>
+                                                            <input type="radio" name="rating" value="4" id="rq4-<?php echo $req['donation_id']; ?>"><label for="rq4-<?php echo $req['donation_id']; ?>"><i class="fa-solid fa-star"></i></label>
+                                                            <input type="radio" name="rating" value="3" id="rq3-<?php echo $req['donation_id']; ?>"><label for="rq3-<?php echo $req['donation_id']; ?>"><i class="fa-solid fa-star"></i></label>
+                                                            <input type="radio" name="rating" value="2" id="rq2-<?php echo $req['donation_id']; ?>"><label for="rq2-<?php echo $req['donation_id']; ?>"><i class="fa-solid fa-star"></i></label>
+                                                            <input type="radio" name="rating" value="1" id="rq1-<?php echo $req['donation_id']; ?>"><label for="rq1-<?php echo $req['donation_id']; ?>"><i class="fa-solid fa-star"></i></label>
+                                                        </div>
+                                                        <div class="rating-form-group" style="margin-top:8px;">
+                                                            <label style="font-size:12px;">Review (Optional)</label>
+                                                            <textarea name="review" class="form-control" rows="2" placeholder="Share your experience about the donor..." style="font-size:13px;"></textarea>
+                                                        </div>
+                                                        <button type="submit" class="btn btn-primary" style="margin-top:8px;padding:8px 16px;font-size:13px;"><i class="fa-solid fa-paper-plane"></i> Submit Rating</button>
+                                                    </form>
+                                                </div>
+                                                <?php else: ?>
+                                                <div style="margin-top:8px;font-size:12px;color:var(--text-muted);text-align:center;">
+                                                    <i class="fa-solid fa-circle-check" style="color:var(--primary);"></i> You rated this donor <?php echo !empty($rtr['rating_donor']) ? render_stars($rtr['rating_donor'], 12) : ''; ?>
+                                                </div>
+                                                <?php endif; endif; ?>
                                             <?php endif; ?>
                                         </div>
                                         
@@ -1990,6 +2417,33 @@ $flash = get_flash_message();
                                     <i class="fa-solid fa-phone" style="width: 20px; color: var(--primary);"></i>
                                     <span>Phone: <strong><?php echo htmlspecialchars($user_phone); ?></strong></span>
                                 </div>
+                            </div>
+
+                            <!-- Rating Summary Section -->
+                            <?php $user_rating_data = get_user_rating($pdo, $user_id); ?>
+                            <div style="margin-top: 8px; padding: 16px; background: var(--background); border-radius: 12px; text-align: center;">
+                                <div style="font-size: 13px; font-weight: 700; color: var(--text-primary); margin-bottom: 10px; display: flex; align-items: center; justify-content: center; gap: 6px;">
+                                    <i class="fa-solid fa-star" style="color: #f59e0b;"></i> Rating Summary
+                                </div>
+                                <?php if ($user_rating_data['total_ratings'] > 0): ?>
+                                    <div style="margin-bottom: 8px;">
+                                        <?php echo render_stars($user_rating_data['average'], 22); ?>
+                                    </div>
+                                    <div style="font-size: 24px; font-weight: 800; color: var(--text-primary);">
+                                        <?php echo number_format($user_rating_data['average'], 1); ?>
+                                        <span style="font-size: 13px; font-weight: 600; color: var(--text-muted);">/ 5</span>
+                                    </div>
+                                    <div style="font-size: 12px; color: var(--text-muted); margin-top: 10px;">
+                                        <div style="display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+                                            <span><i class="fa-solid fa-hand-holding-heart" style="color: var(--primary);"></i> As Donor: <strong><?php echo number_format($user_rating_data['as_donor'], 1); ?></strong> (<?php echo $user_rating_data['count_as_donor']; ?>)</span>
+                                            <span><i class="fa-solid fa-hand" style="color: var(--secondary);"></i> As Receiver: <strong><?php echo number_format($user_rating_data['as_receiver'], 1); ?></strong> (<?php echo $user_rating_data['count_as_receiver']; ?>)</span>
+                                        </div>
+                                    </div>
+                                <?php else: ?>
+                                    <div style="font-size: 13px; color: var(--text-muted);">
+                                        <i class="fa-regular fa-star"></i> No ratings yet. Complete a donation to earn ratings!
+                                    </div>
+                                <?php endif; ?>
                             </div>
                         </div>
 

@@ -19,12 +19,16 @@ if (isset($_POST['seed'])) {
         // 2. Insert test users
         // Hashed passwords:
         $user_pwd = password_hash('UserPass123!', PASSWORD_BCRYPT);
-        $admin_pwd = password_hash('AdminPass123!', PASSWORD_BCRYPT);
+        $admin_pwd = password_hash('admin@123', PASSWORD_BCRYPT);
 
         $stmt = $pdo->prepare("INSERT INTO users (name, email, address, phone, password, role) VALUES (?, ?, ?, ?, ?, ?)");
         
-        // Admin
-        $stmt->execute(['System Administrator', 'admin@sayog.com', 'Admin Office', '0000000000', $admin_pwd, 'admin']);
+        // Default Admin (auto-created by config.php on fresh install)
+        $stmt->execute(['Administrator', 'admin@123', 'Admin Office', '0000000000', $admin_pwd, 'admin']);
+        
+        // Seeded Admin
+        $admin2_pwd = password_hash('AdminPass123!', PASSWORD_BCRYPT);
+        $stmt->execute(['System Administrator', 'admin@sayog.com', 'Admin Office', '0000000000', $admin2_pwd, 'admin']);
 
         // Users
         $stmt->execute(['Kathmandu Bakery & Cafe', 'user1@sayog.com', 'New Baneshwor, Kathmandu', '9841122334', $user_pwd, 'user']);
@@ -167,7 +171,13 @@ if (isset($_POST['seed'])) {
         <div style="background-color: var(--background); border: 1px solid var(--border); padding: 16px; border-radius: 8px; margin-bottom: 24px; font-size: 13.5px; color: var(--text-secondary);">
             <h4 style="color: var(--text-primary); margin-bottom: 8px; font-weight: 700;">Seeded Accounts Credentials:</h4>
             <div style="margin-bottom: 8px;">
-                <span class="status-badge" style="padding: 2px 6px; background-color: rgba(239,68,68,0.1); color:#b91c1c;">ADMIN ACCOUNT</span>
+                <span class="status-badge" style="padding: 2px 6px; background-color: rgba(239,68,68,0.1); color:#b91c1c;">DEFAULT ADMIN</span>
+                <div style="margin-top: 4px;">Email: <strong>admin@123</strong></div>
+                <div>Password: <strong>admin@123</strong></div>
+            </div>
+            <hr style="border: 0; border-top: 1px solid var(--border); margin: 10px 0;">
+            <div style="margin-bottom: 8px;">
+                <span class="status-badge" style="padding: 2px 6px; background-color: rgba(239,68,68,0.1); color:#b91c1c;">SEEDED ADMIN</span>
                 <div style="margin-top: 4px;">Email: <strong>admin@sayog.com</strong></div>
                 <div>Password: <strong>AdminPass123!</strong></div>
             </div>

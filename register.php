@@ -65,8 +65,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (empty($errors)) {
         try {
             $password_hash = password_hash($password, PASSWORD_BCRYPT);
-            $stmt = $pdo->prepare("INSERT INTO users (name, email, address, phone, password, role) VALUES (?, ?, ?, ?, ?, ?)");
-            $stmt->execute([$name, $email, $address, $phone, $password_hash, 'user']);
+            
+            // Handle profile photo upload
+            $profile_photo = null;
+            if (!empty($_FILES['profile_photo']['name'])) {
+                $photoFile = $_FILES['profile_photo'];
+                if ($photoFile['error'] === UPLOAD_ERR_OK) {
+                    $allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
+                    $finfo = new finfo(FILEINFO_MIME_TYPE);
+                    $mime = $finfo->file($photoFile['tmp_name']);
+                    if (in_array($mime, $allowedTypes, true) && $photoFile['size'] <= 2 * 1024 * 1024) {
+                        $extension = pathinfo($photoFile['name'], PATHINFO_EXTENSION);
+                        $filename = 'profile_' . uniqid() . '.' . strtolower($extension);
+                        $destination = UPLOADS_DIR . '/' . $filename;
+                        if (move_uploaded_file($photoFile['tmp_name'], $destination)) {
+                            $profile_photo = 'uploads/' . $filename;
+                        }
+                    }
+                }
+            }
+            
+            $stmt = $pdo->prepare("INSERT INTO users (name, email, address, phone, password, role, profile_photo) VALUES (?, ?, ?, ?, ?, ?, ?)");
+            $stmt->execute([$name, $email, $address, $phone, $password_hash, 'user', $profile_photo]);
+            
+            // Send welcome email notification
+            $new_user_id = $pdo->lastInsertId();
+            create_notification($pdo, $new_user_id, 'registration',
+                'Welcome to Sayog, ' . $name . '! Your account has been created successfully. You can now browse and donate food in your community.',
+                'login.php', true);
             
             // Set success flash message and redirect
             set_flash_message('success', 'Registration successful! You can now log in.');
@@ -86,6 +112,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <link rel="stylesheet" href="style.css">
     <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="js/app.js"></script>
 </head>
 <body class="auth-wrapper">
     <div class="auth-card">
@@ -97,6 +124,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <span>SAYOG</span>
             </a>
             <p class="auth-subtitle">Connecting surplus food with those in need</p>
+            <div style="display:flex;gap:8px;justify-content:center;margin-top:12px;">
+                <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+                    <i class="fa-solid fa-moon"></i>
+                </button>
+                <button class="lang-toggle" onclick="toggleLanguage()" style="background:rgba(59,130,246,0.1);padding:6px 14px;border-radius:999px;border:1px solid var(--border);cursor:pointer;font-size:12px;font-weight:600;color:var(--text-secondary);">
+                    <span>नेपाली</span>
+                </button>
+            </div>
         </div>
 
         <?php if (!empty($errors)): ?>
@@ -113,7 +148,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </div>
         <?php endif; ?>
 
-        <form action="register.php" method="POST" id="registerForm" novalidate>
+        <form action="register.php" method="POST" id="registerForm" enctype="multipart/form-data" novalidate>
             <!-- Name & Email -->
             <div class="form-row">
                 <div class="form-group">
@@ -139,7 +174,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 </div>
             </div>
 
-            <!-- No role selection needed (Multi-role account) -->
+            <!-- Profile Photo Upload -->
+            <div class="form-group">
+                <label class="form-label" data-i18n="form.photo">Profile Photo</label>
+                <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+                    <div style="width:80px;height:80px;border-radius:50%;background:var(--border);display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0;border:2px solid var(--border);">
+                        <img id="profilePhotoPreview" src="" alt="Preview" style="width:100%;height:100%;object-fit:cover;display:none;">
+                        <i class="fa-solid fa-camera" style="font-size:24px;color:var(--text-muted);"></i>
+                    </div>
+                    <div>
+                        <input type="file" id="profile_photo" name="profile_photo" class="form-control" accept="image/*" onchange="previewProfilePhoto(this)" style="padding:8px;">
+                        <div class="validation-hint">Optional. JPG, PNG or WEBP. Max 2MB.</div>
+                    </div>
+                </div>
+            </div>
 
             <!-- Password Fields -->
             <div class="form-row">

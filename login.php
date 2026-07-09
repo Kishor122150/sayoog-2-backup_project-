@@ -40,6 +40,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $_SESSION['user_address'] = $user['address'];
                     $_SESSION['user_phone'] = $user['phone'];
                     $_SESSION['user_role'] = $user['role'] ?? 'user';
+                    $_SESSION['user_photo'] = $user['profile_photo'] ?? null;
                     if (!empty($redirect) && strpos($redirect, 'http') !== 0 && strpos($redirect, '//') !== 0) {
                         redirect($redirect);
                     }
@@ -63,6 +64,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <link rel="stylesheet" href="style.css">
     <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="js/app.js"></script>
 </head>
 <body class="auth-wrapper">
     <div class="auth-card animate-fade-in">
@@ -74,6 +76,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <span>SAYOG</span>
             </a>
             <p class="auth-subtitle">Connecting surplus food with those in need</p>
+            <div style="display:flex;gap:8px;justify-content:center;margin-top:12px;">
+                <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+                    <i class="fa-solid fa-moon"></i>
+                </button>
+                <button class="lang-toggle" onclick="toggleLanguage()" style="background:rgba(59,130,246,0.1);padding:6px 14px;border-radius:999px;border:1px solid var(--border);cursor:pointer;font-size:12px;font-weight:600;color:var(--text-secondary);">
+                    <span>नेपाली</span>
+                </button>
+            </div>
         </div>
 
         <!-- Display Success Flash Messages (e.g. Registered successfully) -->
@@ -125,10 +135,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <span style="position: absolute; top: -10px; left: 50%; transform: translateX(-50%); background: var(--surface); padding: 0 10px; font-size: 13px; color: var(--text-secondary);">or</span>
         </div>
 
-        <a href="#" class="btn btn-block" style="background-color: white; color: #333; border: 1px solid #ddd; margin-bottom: 10px; display: flex; align-items: center; justify-content: center; gap: 8px; text-decoration: none;">
+        <!-- <a href="#" class="btn btn-block" style="background-color: white; color: #333; border: 1px solid #ddd; margin-bottom: 10px; display: flex; align-items: center; justify-content: center; gap: 8px; text-decoration: none;">
             <img src="https://developers.google.com/identity/images/g-logo.png" alt="Google logo" width="20" height="20">
             Sign in with Google
-        </a>
+        </a> -->
 
         <div class="auth-footer">
             Don't have an account? <a href="register.php">Sign Up</a>
@@ -137,7 +147,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <a href="index.php"><i class="fa-solid fa-arrow-left"></i> Back to Website</a>
         </div>
         <div class="auth-footer" style="margin-top: 12px; font-size: 13px; color: var(--text-secondary);">
-            Are you an administrator? <a href="admin-login.php">Sign in to Admin Panel</a>
+            Are you an administrator? <a href="admin/admin-login.php">Sign in to Admin Panel</a>
         </div>
     </div>
 </body>
