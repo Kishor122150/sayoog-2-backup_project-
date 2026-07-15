@@ -21,6 +21,96 @@ $redirect = 'donation.php?id=' . $donation_id;
     <script src="js/app.js"></script>
     
     <style>
+      /* ===== MOBILE NAVIGATION — Hamburger Menu ===== */
+      .mobile-nav-toggle {
+        display: none;
+        background: none;
+        border: none;
+        font-size: 24px;
+        color: var(--text-primary, #0f172a);
+        cursor: pointer;
+        padding: 8px;
+        line-height: 1;
+        z-index: 1100;
+        position: relative;
+        transition: color 0.3s ease;
+      }
+      .mobile-nav-toggle:hover {
+        color: var(--primary-color, #4f46e5);
+      }
+
+      .mobile-nav-overlay {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.45);
+        backdrop-filter: blur(4px);
+        -webkit-backdrop-filter: blur(4px);
+        z-index: 1050;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.3s ease;
+      }
+      .mobile-nav-overlay.mobile-nav-open {
+        opacity: 1;
+        pointer-events: auto;
+      }
+
+      @media (max-width: 767px) {
+        .site-nav {
+          position: fixed;
+          top: 0;
+          left: 0;
+          bottom: 0;
+          width: 280px;
+          max-width: 85vw;
+          background: #ffffff;
+          box-shadow: 0 0 40px rgba(0, 0, 0, 0.15);
+          flex-direction: column;
+          align-items: stretch;
+          justify-content: flex-start;
+          padding: 80px 20px 24px;
+          gap: 4px;
+          z-index: 1090;
+          transform: translateX(-100%);
+          transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+          overflow-y: auto;
+          display: flex !important;
+          flex-wrap: nowrap;
+        }
+        .site-nav.mobile-nav-open {
+          transform: translateX(0);
+        }
+        .site-nav a {
+          padding: 12px 16px;
+          font-size: 15px;
+          border-radius: 10px;
+          width: 100%;
+          justify-content: center;
+          margin-left: 0;
+        }
+        .site-nav a[style*="background: #059669"] {
+          padding: 12px 16px;
+          font-size: 15px;
+          width: 100%;
+          justify-content: center;
+        }
+        .mobile-nav-toggle {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .mobile-nav-overlay {
+          display: block;
+        }
+        .mobile-nav-overlay.mobile-nav-open {
+          display: block;
+        }
+      }
+
         :root {
             --primary-color: #4f46e5;
             --primary-hover: #4338ca;
@@ -340,11 +430,17 @@ $redirect = 'donation.php?id=' . $donation_id;
     </style>
 </head>
 <body>
+    <!-- Mobile Nav Overlay -->
+    <div class="mobile-nav-overlay" id="mobileNavOverlay"></div>
+
     <header class="site-header">
+        <button class="mobile-nav-toggle" id="mobileNavToggle" aria-label="Toggle navigation menu">
+            <i class="fa-solid fa-bars"></i>
+        </button>
         <div class="site-branding">
             <a href="index.php" class="site-logo"><i class="fa-solid fa-hand-holding-heart"></i> Sayog</a>
         </div>
-       <nav class="site-nav">
+       <nav class="site-nav" id="mobileNav">
             <a href="index.php">Home</a>
             <a href="donations.php" class="active" style="color: #059669;">Food Listings</a>
             <a href="about.php">About</a>
@@ -535,5 +631,57 @@ $redirect = 'donation.php?id=' . $donation_id;
     <footer class="site-footer">
         <p>&copy; <?php echo date('Y'); ?> Sayog. Connecting surplus food with communities.</p>
     </footer>
+
+  <script>
+    (function() {
+      var toggle = document.getElementById('mobileNavToggle');
+      var nav = document.getElementById('mobileNav');
+      var overlay = document.getElementById('mobileNavOverlay');
+      var icon = toggle ? toggle.querySelector('i') : null;
+
+      if (!toggle || !nav || !overlay) return;
+
+      function openMenu() {
+        nav.classList.add('mobile-nav-open');
+        overlay.classList.add('mobile-nav-open');
+        if (icon) {
+          icon.className = 'fa-solid fa-xmark';
+        }
+        toggle.setAttribute('aria-label', 'Close navigation menu');
+        document.body.style.overflow = 'hidden';
+      }
+
+      function closeMenu() {
+        nav.classList.remove('mobile-nav-open');
+        overlay.classList.remove('mobile-nav-open');
+        if (icon) {
+          icon.className = 'fa-solid fa-bars';
+        }
+        toggle.setAttribute('aria-label', 'Toggle navigation menu');
+        document.body.style.overflow = '';
+      }
+
+      toggle.addEventListener('click', function(e) {
+        e.stopPropagation();
+        if (nav.classList.contains('mobile-nav-open')) {
+          closeMenu();
+        } else {
+          openMenu();
+        }
+      });
+
+      overlay.addEventListener('click', closeMenu);
+
+      nav.querySelectorAll('a').forEach(function(link) {
+        link.addEventListener('click', closeMenu);
+      });
+
+      document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && nav.classList.contains('mobile-nav-open')) {
+          closeMenu();
+        }
+      });
+    })();
+  </script>
 </body>
 </html>

@@ -705,7 +705,7 @@ $cms_tab = sanitize($_GET['cms_tab'] ?? 'homepage');
                                                     <form action="admin.php?section=users" method="POST" class="inline-form" onsubmit="return confirm('Delete this user?');">
                                                         <input type="hidden" name="action" value="delete_user">
                                                         <input type="hidden" name="user_id" value="<?php echo $user['id']; ?>">
-                                                        <button type="submit" class="btn btn-sm btn-danger"><i class="fa-solid fa-trash-can"></i> Delete</button>
+                                                        <button type="submit" class="btn btn-sm btn-danger" style="color:red"><i class="fa-solid fa-trash-can"></i> Delete</button>
                                                     </form>
                                                 </div>
                                             </td>
@@ -796,7 +796,7 @@ $cms_tab = sanitize($_GET['cms_tab'] ?? 'homepage');
                                                     <form action="admin.php?section=contact_messages" method="POST" class="inline-form" onsubmit="return confirm('Delete this message permanently?');">
                                                         <input type="hidden" name="action" value="delete_contact_message">
                                                         <input type="hidden" name="message_id" value="<?= $row['id']; ?>">
-                                                        <button type="submit" class="btn btn-sm btn-danger"><i class="fa-regular fa-trash-can"></i> Del</button>
+                                                        <button type="submit" class="btn btn-sm btn-danger" style="color:red"><i class="fa-regular fa-trash-can"></i> Delete</button>
                                                     </form>
                                                 </div>
                                             </td>
@@ -808,6 +808,7 @@ $cms_tab = sanitize($_GET['cms_tab'] ?? 'homepage');
                     </div>
                 </div>
 
+                
             <!-- ============================== -->
             <!-- DONATIONS SECTION             -->
             <!-- ============================== -->

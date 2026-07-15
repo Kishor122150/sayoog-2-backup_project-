@@ -59,6 +59,109 @@ if(isset($_POST['send'])){
 <script src="js/app.js"></script>
 
 <style>
+  /* ===== MOBILE NAVIGATION — Hamburger Menu ===== */
+  .mobile-nav-toggle {
+    display: none;
+    background: none;
+    border: none;
+    font-size: 24px;
+    color: var(--text-primary, #0f172a);
+    cursor: pointer;
+    padding: 8px;
+    line-height: 1;
+    z-index: 1100;
+    position: relative;
+    transition: color 0.3s ease;
+  }
+  .mobile-nav-toggle:hover {
+    color: #059669;
+  }
+
+  .mobile-nav-overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    z-index: 1050;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+  }
+  .mobile-nav-overlay.mobile-nav-open {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  @media (max-width: 767px) {
+    .site-nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      bottom: 0;
+      width: 280px;
+      max-width: 85vw;
+      background: var(--surface, #ffffff);
+      box-shadow: 0 0 40px rgba(0, 0, 0, 0.15);
+      flex-direction: column;
+      align-items: stretch;
+      justify-content: flex-start;
+      padding: 80px 20px 24px;
+      gap: 4px;
+      z-index: 1090;
+      transform: translateX(-100%);
+      transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+      overflow-y: auto;
+      display: flex !important;
+      flex-wrap: nowrap;
+    }
+    .site-nav.mobile-nav-open {
+      transform: translateX(0);
+    }
+    .site-nav a {
+      padding: 12px 16px;
+      font-size: 15px;
+      border-radius: 10px;
+      width: 100%;
+      justify-content: center;
+    }
+    .site-nav a[style*="background: #059669"] {
+      padding: 12px 16px;
+      font-size: 15px;
+      width: 100%;
+      justify-content: center;
+    }
+    .site-nav .theme-toggle,
+    .site-nav .lang-toggle {
+      width: 100%;
+      justify-content: center;
+      padding: 12px 16px;
+      font-size: 14px;
+      margin-left: 0 !important;
+      margin-top: 4px;
+    }
+    .mobile-nav-toggle {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .mobile-nav-overlay {
+      display: block;
+    }
+    .mobile-nav-overlay.mobile-nav-open {
+      display: block;
+    }
+
+    [data-theme="dark"] .site-nav {
+      background: var(--surface, #1e293b);
+      box-shadow: 0 0 40px rgba(0, 0, 0, 0.4);
+    }
+  }
+
 
 .contact-section{
 
@@ -221,9 +324,128 @@ border-radius:8px;
 .contact-section{
 
 grid-template-columns:1fr;
+}
 
 }
 
+@media(max-width:768px){
+  .contact-section{
+    margin:30px auto;
+    padding:12px;
+    gap:20px;
+  }
+  .contact-info{
+    padding:24px 20px;
+  }
+  .contact-info h2{
+    font-size:1.3rem;
+  }
+  .contact-info p{
+    font-size:14px;
+    line-height:24px;
+  }
+  .info{
+    font-size:14px;
+    margin:16px 0;
+  }
+  .contact-form{
+    padding:24px 20px;
+  }
+  .contact-form h2{
+    font-size:1.2rem;
+    margin-bottom:16px;
+  }
+  .contact-form input,
+  .contact-form textarea{
+    padding:12px;
+    font-size:14px;
+  }
+  .contact-form textarea{
+    height:120px;
+  }
+  .contact-form button{
+    padding:12px;
+    font-size:15px;
+  }
+}
+
+@media(max-width:480px){
+  .contact-section{
+    margin:20px auto;
+    padding:8px;
+    gap:16px;
+  }
+  .contact-info{
+    padding:20px 16px;
+    border-radius:12px;
+  }
+  .contact-info h2{
+    font-size:1.2rem;
+    margin-bottom:14px;
+  }
+  .contact-info p{
+    font-size:13px;
+  }
+  .info{
+    font-size:13px;
+    margin:12px 0;
+  }
+  .contact-form{
+    padding:20px 16px;
+    border-radius:12px;
+  }
+  .contact-form h2{
+    font-size:1.1rem;
+  }
+  .contact-form input,
+  .contact-form textarea{
+    padding:10px;
+    font-size:14px;
+    margin-bottom:14px;
+  }
+  .contact-form button{
+    padding:12px;
+    font-size:14px;
+  }
+  .success,
+  .error{
+    padding:12px;
+    font-size:13px;
+  }
+}
+
+@media(max-width:375px){
+  .contact-section{
+    padding:6px;
+    gap:12px;
+  }
+  .contact-info{
+    padding:16px 12px;
+  }
+  .contact-info h2{
+    font-size:1.1rem;
+  }
+  .contact-info p{
+    font-size:12px;
+  }
+  .info{
+    font-size:12px;
+  }
+  .contact-form{
+    padding:16px 12px;
+  }
+  .contact-form h2{
+    font-size:1rem;
+  }
+  .contact-form input,
+  .contact-form textarea{
+    padding:8px 10px;
+    font-size:13px;
+  }
+  .contact-form button{
+    padding:10px;
+    font-size:13px;
+  }
 }
 
 </style>
@@ -232,14 +454,20 @@ grid-template-columns:1fr;
 
 <body>
 
+<!-- Mobile Nav Overlay -->
+<div class="mobile-nav-overlay" id="mobileNavOverlay"></div>
+
 <header class="site-header">
+<button class="mobile-nav-toggle" id="mobileNavToggle" aria-label="Toggle navigation menu">
+    <i class="fa-solid fa-bars"></i>
+</button>
 <div class="site-branding">
 <a href="index.php" class="site-logo">
 <i class="fa-solid fa-hand-holding-heart"></i> Sayog
 </a>
 </div>
 
-<nav class="site-nav">
+<nav class="site-nav" id="mobileNav">
 <a href="index.php" data-i18n="nav.home">Home</a>
 <a href="donations.php" data-i18n="nav.food_listings">Food Listings</a>
 <a href="about.php" data-i18n="nav.about">About</a>
@@ -375,6 +603,58 @@ Send Message
 <footer class="site-footer">
 <p>&copy; <?php echo date('Y'); ?> Sayog. Connecting surplus food with communities.</p>
 </footer>
+
+<script>
+(function() {
+  var toggle = document.getElementById('mobileNavToggle');
+  var nav = document.getElementById('mobileNav');
+  var overlay = document.getElementById('mobileNavOverlay');
+  var icon = toggle ? toggle.querySelector('i') : null;
+
+  if (!toggle || !nav || !overlay) return;
+
+  function openMenu() {
+    nav.classList.add('mobile-nav-open');
+    overlay.classList.add('mobile-nav-open');
+    if (icon) {
+      icon.className = 'fa-solid fa-xmark';
+    }
+    toggle.setAttribute('aria-label', 'Close navigation menu');
+    document.body.style.overflow = 'hidden';
+  }
+
+  function closeMenu() {
+    nav.classList.remove('mobile-nav-open');
+    overlay.classList.remove('mobile-nav-open');
+    if (icon) {
+      icon.className = 'fa-solid fa-bars';
+    }
+    toggle.setAttribute('aria-label', 'Toggle navigation menu');
+    document.body.style.overflow = '';
+  }
+
+  toggle.addEventListener('click', function(e) {
+    e.stopPropagation();
+    if (nav.classList.contains('mobile-nav-open')) {
+      closeMenu();
+    } else {
+      openMenu();
+    }
+  });
+
+  overlay.addEventListener('click', closeMenu);
+
+  nav.querySelectorAll('a').forEach(function(link) {
+    link.addEventListener('click', closeMenu);
+  });
+
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && nav.classList.contains('mobile-nav-open')) {
+      closeMenu();
+    }
+  });
+})();
+</script>
 
 </body>
 </html>

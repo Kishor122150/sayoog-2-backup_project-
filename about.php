@@ -42,6 +42,106 @@ if (!$cms) {
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="js/app.js"></script>
     
+    <style>
+      /* ===== MOBILE NAVIGATION — Hamburger Menu ===== */
+      .mobile-nav-toggle {
+        display: none;
+        background: none;
+        border: none;
+        font-size: 24px;
+        color: var(--text-main, #0f172a);
+        cursor: pointer;
+        padding: 8px;
+        line-height: 1;
+        z-index: 1100;
+        position: relative;
+        transition: color 0.3s ease;
+      }
+      .mobile-nav-toggle:hover {
+        color: var(--primary-color, #059669);
+      }
+
+      .mobile-nav-overlay {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.45);
+        backdrop-filter: blur(4px);
+        -webkit-backdrop-filter: blur(4px);
+        z-index: 1050;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.3s ease;
+      }
+      .mobile-nav-overlay.mobile-nav-open {
+        opacity: 1;
+        pointer-events: auto;
+      }
+
+      @media (max-width: 767px) {
+        .site-nav {
+          position: fixed;
+          top: 0;
+          left: 0;
+          bottom: 0;
+          width: 280px;
+          max-width: 85vw;
+          background: #ffffff;
+          box-shadow: 0 0 40px rgba(0, 0, 0, 0.15);
+          flex-direction: column;
+          align-items: stretch;
+          justify-content: flex-start;
+          padding: 80px 20px 24px;
+          gap: 4px;
+          z-index: 1090;
+          transform: translateX(-100%);
+          transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+          overflow-y: auto;
+          display: flex !important;
+          flex-wrap: nowrap;
+        }
+        .site-nav.mobile-nav-open {
+          transform: translateX(0);
+        }
+        .site-nav a {
+          padding: 12px 16px;
+          font-size: 15px;
+          border-radius: 10px;
+          width: 100%;
+          justify-content: center;
+        }
+        .site-nav a[style*="background: #059669"] {
+          padding: 12px 16px;
+          font-size: 15px;
+          width: 100%;
+          justify-content: center;
+        }
+        .site-nav .theme-toggle,
+        .site-nav .lang-toggle {
+          width: 100%;
+          justify-content: center;
+          padding: 12px 16px;
+          font-size: 14px;
+          margin-left: 0 !important;
+          margin-top: 4px;
+        }
+        .mobile-nav-toggle {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .mobile-nav-overlay {
+          display: block;
+        }
+        .mobile-nav-overlay.mobile-nav-open {
+          display: block;
+        }
+      }
+    </style>
+
     <!-- Self-contained custom green theme styling with beautiful components -->
     <style>
         :root {
@@ -386,14 +486,109 @@ if (!$cms) {
             line-height: 1.5;
             margin: 0;
         }
+
+        /* ===== RESPONSIVE ENHANCEMENTS for About Page ===== */
+        @media (max-width: 768px) {
+          .about-hero-grid { padding: 20px 0; gap: 28px; }
+          .about-hero-grid .hero-title { font-size: 1.6rem !important; }
+          .about-hero-grid .hero-desc { font-size: 0.95rem !important; }
+          .about-actions { flex-direction: column; }
+          .about-actions .btn { width: 100%; justify-content: center; }
+          .about-highlights li { font-size: 0.85rem !important; }
+          .mission-card { padding: 24px !important; }
+          .mission-card h3 { font-size: 1.2rem !important; }
+          .stats-row { grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+          .stat-item strong { font-size: 1.2rem !important; }
+          .stat-item span { font-size: 0.7rem !important; }
+          .panels-grid { grid-template-columns: 1fr !important; gap: 16px; margin: 30px 0 !important; }
+          .overview-panel { padding: 20px !important; }
+          .overview-panel h2 { font-size: 1.2rem !important; }
+          .feature-grid-wrapper { grid-template-columns: 1fr 1fr !important; gap: 16px; }
+          .feature-box-card { padding: 24px 16px !important; }
+        }
+
+        @media (max-width: 480px) {
+          .about-hero-grid .hero-title { font-size: 1.3rem !important; }
+          .about-hero-grid .hero-desc { font-size: 0.9rem !important; }
+          .about-badge { font-size: 0.75rem; padding: 5px 12px; }
+          .about-highlights li { font-size: 0.8rem !important; gap: 8px; }
+          .about-highlights li i { font-size: 1rem; }
+          .mission-card { padding: 20px !important; }
+          .mission-card h3 { font-size: 1.1rem !important; }
+          .mission-card p { font-size: 0.9rem; }
+          .stats-row { grid-template-columns: 1fr; gap: 12px; }
+          .stat-item { align-items: center; text-align: center; }
+          .stat-item strong { font-size: 1.1rem !important; }
+          .panels-grid { gap: 12px; margin: 20px 0 !important; }
+          .overview-panel { padding: 16px !important; border-radius: 16px; }
+          .overview-panel h2 { font-size: 1rem !important; }
+          .overview-panel p { font-size: 0.85rem; line-height: 1.5; }
+          .feature-grid-wrapper { grid-template-columns: 1fr !important; gap: 12px; }
+          .feature-box-card { padding: 20px 16px !important; }
+          .feature-box-card h3 { font-size: 1.05rem; }
+          .feature-box-card p { font-size: 0.85rem; }
+          .feature-box-card i { width: 52px; height: 52px; font-size: 1.4rem; }
+          .hero-title { margin-bottom: 14px !important; }
+          .hero-desc { margin-bottom: 24px !important; }
+        }
+
+        @media (max-width: 375px) {
+          .about-hero-grid { padding: 10px 0; gap: 20px; }
+          .about-hero-grid .hero-title { font-size: 1.1rem !important; }
+          .about-hero-grid .hero-desc { font-size: 0.85rem !important; line-height: 1.5; }
+          .about-badge { font-size: 0.7rem; padding: 4px 10px; gap: 4px; }
+          .about-highlights { gap: 6px; }
+          .about-highlights li { font-size: 0.75rem !important; }
+          .mission-card { padding: 16px !important; }
+          .mission-card h3 { font-size: 1rem !important; }
+          .mission-card p { font-size: 0.85rem; }
+          .stat-item strong { font-size: 1rem !important; }
+          .stat-item span { font-size: 0.65rem !important; }
+          .feature-box-card { padding: 16px 12px !important; }
+          .feature-box-card h3 { font-size: 0.95rem; }
+          .feature-box-card p { font-size: 0.8rem; }
+          .feature-box-card i { width: 44px; height: 44px; font-size: 1.2rem; }
+          .overview-panel { padding: 14px !important; }
+          .overview-panel h2 { font-size: 0.95rem !important; gap: 6px; }
+          .overview-panel p { font-size: 0.8rem; }
+          .about-actions { gap: 10px; }
+          .about-actions .btn { padding: 10px 20px; font-size: 0.85rem; }
+        }
+
+        @media (max-width: 320px) {
+          .about-hero-grid .hero-title { font-size: 1rem !important; }
+          .about-hero-grid .hero-desc { font-size: 0.8rem !important; }
+          .about-badge { font-size: 0.65rem; padding: 3px 8px; }
+          .about-highlights li { font-size: 0.7rem !important; }
+          .mission-card { border-radius: 16px; }
+          .mission-card h3 { font-size: 0.95rem !important; }
+          .mission-card p { font-size: 0.8rem; }
+          .stat-item strong { font-size: 0.9rem !important; }
+          .stat-item span { font-size: 0.6rem !important; letter-spacing: 0.3px; }
+          .feature-box-card { padding: 12px 10px !important; border-radius: 14px; }
+          .feature-box-card h3 { font-size: 0.9rem; }
+          .feature-box-card p { font-size: 0.75rem; }
+          .feature-box-card i { width: 38px; height: 38px; font-size: 1rem; }
+          .overview-panel { padding: 12px !important; border-radius: 14px; }
+          .overview-panel h2 { font-size: 0.9rem !important; }
+          .overview-panel p { font-size: 0.75rem; }
+          .about-actions .btn { padding: 8px 16px; font-size: 0.8rem; }
+          .stats-row { gap: 8px; }
+        }
     </style>
 </head>
 <body>
+    <!-- Mobile Nav Overlay -->
+    <div class="mobile-nav-overlay" id="mobileNavOverlay"></div>
+
     <header class="site-header" style="border-bottom: 1px solid #e6f4ea; background: #ffffff;">
+        <button class="mobile-nav-toggle" id="mobileNavToggle" aria-label="Toggle navigation menu">
+            <i class="fa-solid fa-bars"></i>
+        </button>
         <div class="site-branding">
             <a href="index.php" class="site-logo" style="color: var(--primary-color);"><i class="fa-solid fa-hand-holding-heart"></i> Sayog</a>
         </div>
-        <nav class="site-nav">
+        <nav class="site-nav" id="mobileNav">
             <a href="index.php" data-i18n="nav.home">Home</a>
             <a href="donations.php" data-i18n="nav.food_listings">Food Listings</a>
             <a href="about.php" class="active" style="color: var(--primary-color);" data-i18n="nav.about">About</a>
@@ -516,5 +711,57 @@ if (!$cms) {
     <footer class="site-footer" style="background: #ffffff; padding: 24px; text-align: center; border-top: 1px solid #e6f4ea; color: var(--text-muted); font-size: 0.9rem; margin-top: 60px;">
         <p>&copy; <?php echo htmlspecialchars($cms['footer_copyright'] ?? date('Y') . ' Sayog. Connecting surplus food with communities.'); ?></p>
     </footer>
+
+  <script>
+    (function() {
+      var toggle = document.getElementById('mobileNavToggle');
+      var nav = document.getElementById('mobileNav');
+      var overlay = document.getElementById('mobileNavOverlay');
+      var icon = toggle ? toggle.querySelector('i') : null;
+
+      if (!toggle || !nav || !overlay) return;
+
+      function openMenu() {
+        nav.classList.add('mobile-nav-open');
+        overlay.classList.add('mobile-nav-open');
+        if (icon) {
+          icon.className = 'fa-solid fa-xmark';
+        }
+        toggle.setAttribute('aria-label', 'Close navigation menu');
+        document.body.style.overflow = 'hidden';
+      }
+
+      function closeMenu() {
+        nav.classList.remove('mobile-nav-open');
+        overlay.classList.remove('mobile-nav-open');
+        if (icon) {
+          icon.className = 'fa-solid fa-bars';
+        }
+        toggle.setAttribute('aria-label', 'Toggle navigation menu');
+        document.body.style.overflow = '';
+      }
+
+      toggle.addEventListener('click', function(e) {
+        e.stopPropagation();
+        if (nav.classList.contains('mobile-nav-open')) {
+          closeMenu();
+        } else {
+          openMenu();
+        }
+      });
+
+      overlay.addEventListener('click', closeMenu);
+
+      nav.querySelectorAll('a').forEach(function(link) {
+        link.addEventListener('click', closeMenu);
+      });
+
+      document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && nav.classList.contains('mobile-nav-open')) {
+          closeMenu();
+        }
+      });
+    })();
+  </script>
 </body>
 </html>
