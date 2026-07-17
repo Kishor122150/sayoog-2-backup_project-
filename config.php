@@ -351,10 +351,13 @@ try {
             `donation_id` INT NOT NULL,
             `donor_id` INT NOT NULL,
             `receiver_id` INT NOT NULL,
+            `volunteer_id` INT DEFAULT NULL,
             `rating_donor` TINYINT(1) DEFAULT NULL COMMENT 'Receiver\'s rating of the donor (1-5)',
             `rating_receiver` TINYINT(1) DEFAULT NULL COMMENT 'Donor\'s rating of the receiver (1-5)',
+            `rating_volunteer` TINYINT(1) DEFAULT NULL COMMENT 'Consumer\'s rating of the volunteer (1-5)',
             `review_donor` TEXT DEFAULT NULL COMMENT 'Review left by receiver for donor',
             `review_receiver` TEXT DEFAULT NULL COMMENT 'Review left by donor for receiver',
+            `review_volunteer` TEXT DEFAULT NULL COMMENT 'Review left by consumer for volunteer',
             `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (`donation_id`) REFERENCES `donations`(`id`) ON DELETE CASCADE,
             FOREIGN KEY (`donor_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
@@ -362,6 +365,14 @@ try {
             UNIQUE KEY `unique_donation_rating` (`donation_id`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     ");
+    // Add volunteer_id and rating_volunteer columns if they don't exist (for existing tables)
+    $colCheck = $pdo->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ratings' AND COLUMN_NAME = ?");
+    $colCheck->execute(['volunteer_id']);
+    if (!$colCheck->fetchColumn()) { $pdo->exec("ALTER TABLE ratings ADD COLUMN volunteer_id INT DEFAULT NULL AFTER receiver_id"); }
+    $colCheck->execute(['rating_volunteer']);
+    if (!$colCheck->fetchColumn()) { $pdo->exec("ALTER TABLE ratings ADD COLUMN rating_volunteer TINYINT(1) DEFAULT NULL COMMENT 'Consumer\'s rating of the volunteer (1-5)' AFTER rating_receiver"); }
+    $colCheck->execute(['review_volunteer']);
+    if (!$colCheck->fetchColumn()) { $pdo->exec("ALTER TABLE ratings ADD COLUMN review_volunteer TEXT DEFAULT NULL COMMENT 'Review left by consumer for volunteer' AFTER review_receiver"); }
 
     $createAdminKeysTable = "
         CREATE TABLE IF NOT EXISTS `admin_keys` (
@@ -386,10 +397,261 @@ try {
         $pdo->exec("ALTER TABLE donations ADD COLUMN pickup_reminder_sent TINYINT(1) NOT NULL DEFAULT 0 AFTER certificate_path");
     }
 
+    // Add latitude and longitude columns for map pins
+    $columnCheck->execute(['latitude']);
+    if (!$columnCheck->fetchColumn()) {
+        $pdo->exec("ALTER TABLE donations ADD COLUMN latitude DECIMAL(10,7) DEFAULT NULL AFTER phone");
+    }
+    $columnCheck->execute(['longitude']);
+    if (!$columnCheck->fetchColumn()) {
+        $pdo->exec("ALTER TABLE donations ADD COLUMN longitude DECIMAL(10,7) DEFAULT NULL AFTER latitude");
+    }
+
+    // Add city column for easier Nepal location filtering
+    $columnCheck->execute(['city']);
+    if (!$columnCheck->fetchColumn()) {
+        $pdo->exec("ALTER TABLE donations ADD COLUMN city VARCHAR(100) DEFAULT NULL AFTER longitude");
+    }
+
     // Create certificates directory
     $certDir = __DIR__ . '/uploads/certificates';
     if (!is_dir($certDir)) {
         mkdir($certDir, 0755, true);
+    }
+
+    // ─── VOLUNTEERS TABLE ───
+    $createVolunteersTable = "
+        CREATE TABLE IF NOT EXISTS `volunteers` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `user_id` INT NOT NULL UNIQUE,
+            `profile_photo` VARCHAR(255) DEFAULT NULL,
+            `full_name` VARCHAR(150) NOT NULL,
+            `email` VARCHAR(100) NOT NULL,
+            `phone` VARCHAR(20) NOT NULL,
+            `address` VARCHAR(255) DEFAULT NULL,
+            `municipality` VARCHAR(100) DEFAULT NULL,
+            `ward_number` VARCHAR(20) DEFAULT NULL,
+            `district` VARCHAR(100) DEFAULT NULL,
+            `province` VARCHAR(100) DEFAULT NULL,
+            `date_of_birth` DATE DEFAULT NULL,
+            `gender` ENUM('male','female','other') DEFAULT NULL,
+            `emergency_contact` VARCHAR(50) DEFAULT NULL,
+            `occupation` VARCHAR(100) DEFAULT NULL,
+            `citizenship_front` VARCHAR(255) DEFAULT NULL,
+            `citizenship_back` VARCHAR(255) DEFAULT NULL,
+            `national_id` VARCHAR(255) DEFAULT NULL,
+            `college_id` VARCHAR(255) DEFAULT NULL,
+            `driving_license` VARCHAR(255) DEFAULT NULL,
+            `vehicle_type` ENUM('walking','bicycle','motorcycle','scooter','car') NOT NULL DEFAULT 'walking',
+            `vehicle_number` VARCHAR(50) DEFAULT NULL,
+            `license_number` VARCHAR(50) DEFAULT NULL,
+            `delivery_radius` INT NOT NULL DEFAULT 5,
+            `availability` SET('morning','afternoon','evening','weekend','always') NOT NULL DEFAULT 'always',
+            `online_status` ENUM('available','busy','offline') NOT NULL DEFAULT 'offline',
+            `previous_experience` TEXT DEFAULT NULL,
+            `medical_training` TEXT DEFAULT NULL,
+            `first_aid` TINYINT(1) NOT NULL DEFAULT 0,
+            `languages` VARCHAR(255) DEFAULT NULL,
+            `motivation` TEXT DEFAULT NULL,
+            `status` ENUM('pending','approved','rejected','suspended','inactive') NOT NULL DEFAULT 'pending',
+            `verified_by` INT DEFAULT NULL,
+            `approved_at` DATETIME DEFAULT NULL,
+            `rejected_reason` TEXT DEFAULT NULL,
+            `volunteer_id` VARCHAR(50) DEFAULT NULL,
+            `rating` DECIMAL(2,1) NOT NULL DEFAULT 0.0,
+            `completed_deliveries` INT NOT NULL DEFAULT 0,
+            `community_points` INT NOT NULL DEFAULT 0,
+            `certificate_path` VARCHAR(255) DEFAULT NULL,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    ";
+    $pdo->exec($createVolunteersTable);
+
+    // ─── EMAIL VERIFICATIONS TABLE (for OTP during registration) ───
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `email_verifications` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `email` VARCHAR(100) NOT NULL,
+            `otp` VARCHAR(6) NOT NULL,
+            `expires_at` DATETIME NOT NULL,
+            `verified` TINYINT(1) NOT NULL DEFAULT 0,
+            `attempts` TINYINT NOT NULL DEFAULT 0,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            INDEX `idx_email_otp` (`email`, `otp`),
+            INDEX `idx_expires` (`expires_at`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    ");
+
+    // Migration: add `attempts` column for existing tables that were created before the column was added
+    try {
+        $pdo->exec("ALTER TABLE email_verifications ADD COLUMN attempts TINYINT NOT NULL DEFAULT 0 AFTER verified");
+    } catch (PDOException $e) {
+        // Column already exists — silently ignore
+    }
+
+    // ─── SMTP SETTINGS TABLE ───
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `smtp_settings` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `host` VARCHAR(255) NOT NULL DEFAULT '',
+            `port` INT NOT NULL DEFAULT 587,
+            `username` VARCHAR(255) NOT NULL DEFAULT '',
+            `password` VARCHAR(255) NOT NULL DEFAULT '',
+            `encryption` ENUM('tls','ssl','none') NOT NULL DEFAULT 'tls',
+            `from_email` VARCHAR(255) NOT NULL DEFAULT '',
+            `from_name` VARCHAR(100) NOT NULL DEFAULT 'Sayog',
+            `is_active` TINYINT(1) NOT NULL DEFAULT 0,
+            `test_mode` TINYINT(1) NOT NULL DEFAULT 0,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    ");
+
+    // Seed default SMTP settings row if missing
+    $checkSmtp = $pdo->query("SELECT COUNT(*) FROM smtp_settings")->fetchColumn();
+    if ($checkSmtp == 0) {
+        $pdo->exec("INSERT INTO smtp_settings (host, port, username, password, encryption, from_email, from_name, is_active) VALUES ('', 587, '', '', 'tls', 'noreply@sayog.local', 'Sayog', 0)");
+    }
+
+    // Create upload directories for volunteer documents
+    $volunteerDocsDir = __DIR__ . '/uploads/volunteer_docs';
+    if (!is_dir($volunteerDocsDir)) {
+        mkdir($volunteerDocsDir, 0755, true);
+    }
+
+    // ─── TEAM MEMBERS TABLE ───
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `team_members` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `name` VARCHAR(150) NOT NULL,
+            `role` VARCHAR(100) NOT NULL,
+            `bio` TEXT DEFAULT NULL,
+            `photo` VARCHAR(255) DEFAULT NULL,
+            `email` VARCHAR(100) DEFAULT NULL,
+            `linkedin` VARCHAR(255) DEFAULT NULL,
+            `github` VARCHAR(255) DEFAULT NULL,
+            `website` VARCHAR(255) DEFAULT NULL,
+            `display_order` INT NOT NULL DEFAULT 0,
+            `status` ENUM('active','inactive') NOT NULL DEFAULT 'active',
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    ");
+
+    // Create upload directory for team member photos
+    $teamDir = __DIR__ . '/uploads/team';
+    if (!is_dir($teamDir)) {
+        mkdir($teamDir, 0755, true);
+    }
+
+    // ─── VOLUNTEER DELIVERIES TABLE ───
+    // Add delivery_method column to donations (after donor approves)
+    $colCheckDon = $pdo->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'donations' AND COLUMN_NAME = ?");
+    $colCheckDon->execute(['delivery_method']);
+    if (!$colCheckDon->fetchColumn()) {
+        $pdo->exec("ALTER TABLE donations ADD COLUMN delivery_method ENUM('self_pickup','volunteer') DEFAULT NULL AFTER status");
+    }
+    // Add delivery_method to requests
+    $colCheckReq = $pdo->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'requests' AND COLUMN_NAME = ?");
+    $colCheckReq->execute(['delivery_method']);
+    if (!$colCheckReq->fetchColumn()) {
+        $pdo->exec("ALTER TABLE requests ADD COLUMN delivery_method ENUM('self_pickup','volunteer') DEFAULT NULL AFTER status");
+    }
+
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `volunteer_deliveries` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `donation_id` INT NOT NULL,
+            `request_id` INT NOT NULL,
+            `volunteer_user_id` INT DEFAULT NULL,
+            `consumer_id` INT NOT NULL,
+            `donor_id` INT NOT NULL,
+            `status` ENUM('assigned','accepted','picked_up','in_transit','delivered','cancelled') NOT NULL DEFAULT 'assigned',
+            `accepted_at` DATETIME DEFAULT NULL,
+            `picked_up_at` DATETIME DEFAULT NULL,
+            `in_transit_at` DATETIME DEFAULT NULL,
+            `delivered_at` DATETIME DEFAULT NULL,
+            `cancelled_at` DATETIME DEFAULT NULL,
+            `cancellation_reason` VARCHAR(255) DEFAULT NULL,
+            `donor_notes` TEXT DEFAULT NULL,
+            `delivery_notes` TEXT DEFAULT NULL,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            FOREIGN KEY (`donation_id`) REFERENCES `donations`(`id`) ON DELETE CASCADE,
+            FOREIGN KEY (`request_id`) REFERENCES `requests`(`id`) ON DELETE CASCADE,
+            FOREIGN KEY (`volunteer_user_id`) REFERENCES `users`(`id`) ON DELETE SET NULL,
+            FOREIGN KEY (`consumer_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
+            FOREIGN KEY (`donor_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
+            INDEX `idx_delivery_status` (`status`),
+            INDEX `idx_delivery_volunteer` (`volunteer_user_id`),
+            INDEX `idx_delivery_donation` (`donation_id`),
+            INDEX `idx_delivery_request` (`request_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    ");
+
+    // ─── CHATBOT TABLES ───
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `chatbot_knowledge` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `intent` VARCHAR(50) NOT NULL,
+            `question` VARCHAR(255) NOT NULL,
+            `answer` TEXT NOT NULL,
+            `category` VARCHAR(50) DEFAULT 'general',
+            `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+            `is_primary` TINYINT(1) NOT NULL DEFAULT 0,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            FULLTEXT INDEX `ft_search` (`question`, `answer`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    ");
+
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `chatbot_logs` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `user_id` INT NOT NULL DEFAULT 0,
+            `user_message` TEXT NOT NULL,
+            `bot_response` TEXT NOT NULL,
+            `intent` VARCHAR(50) DEFAULT NULL,
+            `user_role` VARCHAR(20) DEFAULT NULL,
+            `ip_address` VARCHAR(45) DEFAULT NULL,
+            `page_url` VARCHAR(500) DEFAULT NULL,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            INDEX `idx_user` (`user_id`),
+            INDEX `idx_intent` (`intent`),
+            INDEX `idx_created` (`created_at`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    ");
+
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `chatbot_settings` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `setting_key` VARCHAR(100) NOT NULL UNIQUE,
+            `setting_value` TEXT DEFAULT NULL,
+            `setting_type` VARCHAR(20) NOT NULL DEFAULT 'text',
+            `description` VARCHAR(255) DEFAULT NULL,
+            `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    ");
+
+    // Seed default chatbot settings if empty
+    $chatbotCheck = $pdo->query("SELECT COUNT(*) FROM chatbot_settings")->fetchColumn();
+    if ($chatbotCheck == 0) {
+        $defaults = [
+            ['bot_name', 'Sayog Assistant', 'text', 'Name displayed in the chat header'],
+            ['welcome_message', '👋 Hello! I\'m Sayog Assistant, your AI-powered guide.', 'textarea', 'Welcome message'],
+            ['default_suggestions', 'What is Sayog?, How to donate food, Available food, Platform Statistics', 'text', 'Default suggestions'],
+            ['max_message_length', '500', 'number', 'Max message length'],
+            ['log_retention_days', '90', 'number', 'Days to keep logs'],
+            ['rate_limit_messages', '20', 'number', 'Max messages per session'],
+            ['ai_model', 'rule_based', 'select', 'AI model to use'],
+            ['bot_enabled', '1', 'boolean', 'Enable chatbot'],
+        ];
+        $stmt = $pdo->prepare("INSERT INTO chatbot_settings (setting_key, setting_value, setting_type, description) VALUES (?, ?, ?, ?)");
+        foreach ($defaults as $d) {
+            $stmt->execute($d);
+        }
     }
 
 } catch (PDOException $e) {
@@ -484,7 +746,7 @@ function create_notification($pdo, $user_id, $type, $message, $link = null, $sen
         $stmt->execute([$user_id, $type, $message, $link]);
 
         if ($sendEmail) {
-            $emailStmt = $pdo->prepare("SELECT email FROM users WHERE id = ?");
+            $emailStmt = $pdo->prepare("SELECT email, name FROM users WHERE id = ?");
             $emailStmt->execute([$user_id]);
             $user = $emailStmt->fetch();
             if ($user && filter_var($user['email'], FILTER_VALIDATE_EMAIL)) {
@@ -493,9 +755,38 @@ function create_notification($pdo, $user_id, $type, $message, $link = null, $sen
                 if ($link) {
                     $body .= "\n\nView details: " . $link;
                 }
-                $headers = "From: no-reply@sayog.local" . "\r\n" .
-                    "Content-Type: text/plain; charset=UTF-8";
-                @mail($user['email'], $subject, $body, $headers);
+                $htmlBody = '
+                <!DOCTYPE html>
+                <html>
+                <head><meta charset="UTF-8"></head>
+                <body style="margin:0;padding:0;background-color:#f4f7f6;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,sans-serif;">
+                    <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f7f6;padding:30px 10px;">
+                        <tr><td align="center">
+                            <table width="560" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,0.08);">
+                                <tr>
+                                    <td style="background:linear-gradient(135deg,#059669,#047857);padding:28px 40px;text-align:center;">
+                                        <h1 style="color:#ffffff;margin:0;font-size:22px;font-weight:700;">Sayog Notification</h1>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td style="padding:32px 40px;">
+                                        <p style="color:#6b7280;margin:0 0 20px 0;font-size:15px;line-height:1.6;">Hi ' . htmlspecialchars($user['name']) . ',</p>
+                                        <p style="color:#374151;margin:0 0 16px 0;font-size:15px;line-height:1.6;">' . nl2br(htmlspecialchars($message)) . '</p>';
+                if ($link) {
+                    $htmlBody .= '<p style="margin:24px 0;"><a href="' . htmlspecialchars($link) . '" style="display:inline-block;background:#059669;color:#ffffff;padding:12px 28px;border-radius:8px;text-decoration:none;font-size:14px;font-weight:600;">View Details</a></p>';
+                }
+                $htmlBody .= '
+                                        <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0;">
+                                        <p style="color:#9ca3af;margin:0;font-size:12px;line-height:1.5;">Sayog &mdash; Built to connect surplus food with communities.</p>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td></tr>
+                    </table>
+                </body>
+                </html>
+                ';
+                send_email_smtp($pdo, $user['email'], $subject, $body, $htmlBody);
             }
         }
     } catch (PDOException $e) {
@@ -787,11 +1078,13 @@ function get_user_rating($pdo, $user_id) {
         SELECT ROUND(AVG(rating_donor), 1) AS avg_as_donor,
                COUNT(rating_donor) AS count_as_donor,
                ROUND(AVG(rating_receiver), 1) AS avg_as_receiver,
-               COUNT(rating_receiver) AS count_as_receiver
+               COUNT(rating_receiver) AS count_as_receiver,
+               ROUND(AVG(rating_volunteer), 1) AS avg_as_volunteer,
+               COUNT(rating_volunteer) AS count_as_volunteer
         FROM ratings
-        WHERE donor_id = ? OR receiver_id = ?
+        WHERE donor_id = ? OR receiver_id = ? OR volunteer_id = ?
     ");
-    $stmt->execute([$user_id, $user_id]);
+    $stmt->execute([$user_id, $user_id, $user_id]);
     $row = $stmt->fetch();
     $avg = 0; $total = 0; $sum = 0;
     if ($row) {
@@ -803,11 +1096,16 @@ function get_user_rating($pdo, $user_id) {
             $sum += $row['avg_as_receiver'] * $row['count_as_receiver'];
             $total += $row['count_as_receiver'];
         }
+        if ($row['avg_as_volunteer'] && $row['count_as_volunteer']) {
+            $sum += $row['avg_as_volunteer'] * $row['count_as_volunteer'];
+            $total += $row['count_as_volunteer'];
+        }
         if ($total > 0) $avg = round($sum / $total, 1);
     }
     return ['average' => $avg, 'total_ratings' => $total,
         'as_donor' => $row['avg_as_donor'] ?? 0, 'as_receiver' => $row['avg_as_receiver'] ?? 0,
-        'count_as_donor' => $row['count_as_donor'] ?? 0, 'count_as_receiver' => $row['count_as_receiver'] ?? 0];
+        'count_as_donor' => $row['count_as_donor'] ?? 0, 'count_as_receiver' => $row['count_as_receiver'] ?? 0,
+        'as_volunteer' => $row['avg_as_volunteer'] ?? 0, 'count_as_volunteer' => $row['count_as_volunteer'] ?? 0];
 }
 
 /**
@@ -1007,6 +1305,763 @@ function generate_donation_certificate($pdo, $donation_id, $donor_name, $food_it
 
 
 
+
+
+
+// ═════════════════════════════════════════════════════════════════
+// NEPAL MAP GEOCODING FUNCTION
+// ═════════════════════════════════════════════════════════════════
+
+/**
+ * Geocode a Nepal address using Nominatim (OpenStreetMap).
+ * Falls back to known Nepal city coordinates if API fails.
+ * Returns ['lat' => float, 'lng' => float, 'city' => string|null] or null.
+ */
+function geocode_address_nepal($address) {
+    if (empty(trim($address))) return null;
+
+    // Known Nepal city coordinates (fast fallback)
+    $nepal_cities = [
+        'kathmandu' => ['lat' => 27.7172, 'lng' => 85.3240],
+        'lalitpur' => ['lat' => 27.6588, 'lng' => 85.3247],
+        'patan' => ['lat' => 27.6588, 'lng' => 85.3247],
+        'bhaktapur' => ['lat' => 27.6710, 'lng' => 85.4298],
+        'pokhara' => ['lat' => 28.2096, 'lng' => 83.9856],
+        'bharatpur' => ['lat' => 27.6833, 'lng' => 84.4333],
+        'birgunj' => ['lat' => 27.0170, 'lng' => 84.8660],
+        'biratnagar' => ['lat' => 26.4524, 'lng' => 87.2718],
+        'janakpur' => ['lat' => 26.7288, 'lng' => 85.9248],
+        'ghorahi' => ['lat' => 28.0330, 'lng' => 82.4830],
+        'hetauda' => ['lat' => 27.4167, 'lng' => 85.0333],
+        'dhangadhi' => ['lat' => 28.6833, 'lng' => 80.6000],
+        'tulsipur' => ['lat' => 28.1333, 'lng' => 82.3000],
+        'itahari' => ['lat' => 26.6667, 'lng' => 87.2667],
+        'nepalgunj' => ['lat' => 28.0500, 'lng' => 81.6167],
+        'butwal' => ['lat' => 27.6833, 'lng' => 83.4500],
+        'dharan' => ['lat' => 26.8167, 'lng' => 87.2833],
+        'kalaiya' => ['lat' => 27.0333, 'lng' => 85.0000],
+        'jaleshwar' => ['lat' => 26.6500, 'lng' => 85.8000],
+        'kamalamai' => ['lat' => 27.1500, 'lng' => 86.2333],
+        'gorkha' => ['lat' => 28.0000, 'lng' => 84.6333],
+        'baglung' => ['lat' => 28.2667, 'lng' => 83.6000],
+        'tansen' => ['lat' => 27.8667, 'lng' => 83.5500],
+        'banepa' => ['lat' => 27.6333, 'lng' => 85.5167],
+        'dhulikhel' => ['lat' => 27.6167, 'lng' => 85.5500],
+        'kirtipur' => ['lat' => 27.6786, 'lng' => 85.2774],
+        'chitwan' => ['lat' => 27.5333, 'lng' => 84.3333],
+        'bhairahawa' => ['lat' => 27.5000, 'lng' => 83.4500],
+        'siddharthanagar' => ['lat' => 27.5000, 'lng' => 83.4500],
+        'lekhnath' => ['lat' => 28.1833, 'lng' => 84.0000],
+        'damak' => ['lat' => 26.6667, 'lng' => 87.6833],
+        'trl' => ['lat' => 27.3167, 'lng' => 85.2833],
+    ];
+
+    $address_lower = strtolower(trim($address));
+
+    // Check for known city names in the address
+    foreach ($nepal_cities as $city => $coords) {
+        if (strpos($address_lower, $city) !== false) {
+            return ['lat' => $coords['lat'], 'lng' => $coords['lng'], 'city' => ucfirst($city)];
+        }
+    }
+
+    // Try Nominatim API
+    $url = 'https://nominatim.openstreetmap.org/search?format=json&q=' . urlencode($address . ', Nepal') . '&limit=1';
+    $ctx = stream_context_create(['http' => ['timeout' => 3, 'header' => 'User-Agent: Sayog/1.0\r\n']]);
+    $result = @file_get_contents($url, false, $ctx);
+
+    if ($result) {
+        $data = json_decode($result, true);
+        if (!empty($data[0])) {
+            $lat = (float)$data[0]['lat'];
+            $lng = (float)$data[0]['lon'];
+            // Extract city from display name
+            $parts = explode(',', $data[0]['display_name']);
+            $city = trim($parts[0] ?? '');
+            return ['lat' => $lat, 'lng' => $lng, 'city' => $city ?: null];
+        }
+    }
+
+    // Final fallback: default to Kathmandu
+    return ['lat' => 27.7172, 'lng' => 85.3240, 'city' => 'Kathmandu'];
+}
+// ═════════════════════════════════════════════════════════════════
+// VOLUNTEER MODULE HELPER FUNCTIONS
+// ═════════════════════════════════════════════════════════════════
+
+/**
+ * Check if a user has a volunteer record with a specific status.
+ */
+function get_volunteer_status($pdo, $user_id) {
+    $stmt = $pdo->prepare("SELECT status, volunteer_id, rating, completed_deliveries, community_points, online_status, delivery_radius, vehicle_type, availability, profile_photo, full_name, phone FROM volunteers WHERE user_id = ?");
+    $stmt->execute([$user_id]);
+    return $stmt->fetch();
+}
+
+/**
+ * Check if a user is an approved volunteer.
+ */
+function is_volunteer($pdo, $user_id) {
+    $stmt = $pdo->prepare("SELECT id FROM volunteers WHERE user_id = ? AND status = 'approved'");
+    $stmt->execute([$user_id]);
+    return (bool)$stmt->fetch();
+}
+
+/**
+ * Check if a user has a pending volunteer application.
+ */
+function has_pending_volunteer_application($pdo, $user_id) {
+    $stmt = $pdo->prepare("SELECT id FROM volunteers WHERE user_id = ? AND status = 'pending'");
+    $stmt->execute([$user_id]);
+    return (bool)$stmt->fetch();
+}
+
+/**
+ * Get full volunteer details by user ID.
+ */
+function get_volunteer_details($pdo, $user_id) {
+    $stmt = $pdo->prepare("SELECT v.*, u.name AS user_name, u.email AS user_email, u.address AS user_address, u.phone AS user_phone, u.created_at AS user_since FROM volunteers v JOIN users u ON v.user_id = u.id WHERE v.user_id = ?");
+    $stmt->execute([$user_id]);
+    return $stmt->fetch();
+}
+
+/**
+ * Get volunteer details by volunteer record ID.
+ */
+function get_volunteer_by_id($pdo, $volunteer_id) {
+    $stmt = $pdo->prepare("SELECT v.*, u.name AS user_name, u.email AS user_email FROM volunteers v JOIN users u ON v.user_id = u.id WHERE v.id = ?");
+    $stmt->execute([$volunteer_id]);
+    return $stmt->fetch();
+}
+
+/**
+ * Get all volunteers by status.
+ */
+function get_volunteers_by_status($pdo, $status) {
+    $stmt = $pdo->prepare("SELECT v.*, u.name AS user_name, u.email AS user_email FROM volunteers v JOIN users u ON v.user_id = u.id WHERE v.status = ? ORDER BY v.created_at DESC");
+    $stmt->execute([$status]);
+    return $stmt->fetchAll();
+}
+
+/**
+ * Get volunteer counts for admin dashboard.
+ */
+/**
+ * Create a volunteer delivery record after consumer selects volunteer delivery.
+ */
+function create_volunteer_delivery($pdo, $donation_id, $request_id, $consumer_id, $donor_id) {
+    // Check if delivery already exists
+    $stmt = $pdo->prepare("SELECT id FROM volunteer_deliveries WHERE donation_id = ? AND request_id = ?");
+    $stmt->execute([$donation_id, $request_id]);
+    if ($stmt->fetch()) return false;
+
+    $stmt = $pdo->prepare("INSERT INTO volunteer_deliveries (donation_id, request_id, consumer_id, donor_id, status) VALUES (?, ?, ?, ?, 'assigned')");
+    $stmt->execute([$donation_id, $request_id, $consumer_id, $donor_id]);
+    return $pdo->lastInsertId();
+}
+
+/**
+ * Get available deliveries for a volunteer within their delivery radius.
+ * Filters by: approved status, online=available, within radius, donation not expired.
+ */
+function get_available_deliveries_for_volunteer($pdo, $volunteer_user_id) {
+    $vol = get_volunteer_details($pdo, $volunteer_user_id);
+    if (!$vol || $vol['status'] !== 'approved' || $vol['online_status'] !== 'available') return [];
+
+    $radius = (int)$vol['delivery_radius'];
+    $volAddress = strtolower($vol['address'] ?? '');
+    $volTokens = tokenize_address($volAddress);
+
+    $stmt = $pdo->prepare("
+        SELECT vd.*, d.food_item, d.quantity, d.pickup_address, d.phone AS donor_phone,
+               d.city, d.latitude, d.longitude, d.expiry_time,
+               u.name AS donor_name,
+               r.quantity_requested, r.message AS request_message
+        FROM volunteer_deliveries vd
+        JOIN donations d ON vd.donation_id = d.id
+        JOIN users u ON vd.donor_id = u.id
+        JOIN requests r ON vd.request_id = r.id
+        WHERE vd.status = 'assigned'
+          AND vd.volunteer_user_id IS NULL
+          AND d.expiry_time > NOW()
+          AND d.status IN ('accepted')
+        ORDER BY d.created_at DESC
+    ");
+    $stmt->execute();
+    $all = $stmt->fetchAll();
+
+    if (empty($volTokens) || $radius <= 0) return $all;
+
+    // Filter by location proximity (token matching)
+    $filtered = [];
+    foreach ($all as $del) {
+        $pickupTokens = tokenize_address($del['pickup_address']);
+        $common = array_intersect($volTokens, $pickupTokens);
+        if (!empty($common)) {
+            $del['_proximity_score'] = count($common);
+            $filtered[] = $del;
+        }
+    }
+    return !empty($filtered) ? $filtered : $all;
+}
+
+/**
+ * Get active deliveries for a specific volunteer.
+ */
+function get_volunteer_active_deliveries($pdo, $volunteer_user_id) {
+    $stmt = $pdo->prepare("
+        SELECT vd.*, d.food_item, d.quantity, d.pickup_address, d.phone AS donor_phone,
+               d.city, d.latitude, d.longitude,
+               u.name AS donor_name, u.phone AS donor_contact,
+               cu.name AS consumer_name, cu.phone AS consumer_phone, cu.address AS consumer_address
+        FROM volunteer_deliveries vd
+        JOIN donations d ON vd.donation_id = d.id
+        JOIN users u ON vd.donor_id = u.id
+        JOIN users cu ON vd.consumer_id = cu.id
+        WHERE vd.volunteer_user_id = ?
+          AND vd.status IN ('accepted','picked_up','in_transit')
+        ORDER BY vd.updated_at DESC
+    ");
+    $stmt->execute([$volunteer_user_id]);
+    return $stmt->fetchAll();
+}
+
+/**
+ * Get delivery history for a volunteer.
+ */
+function get_volunteer_delivery_history($pdo, $volunteer_user_id, $limit = 20) {
+    $stmt = $pdo->prepare("
+        SELECT vd.*, d.food_item, d.quantity, d.pickup_address,
+               u.name AS donor_name, cu.name AS consumer_name
+        FROM volunteer_deliveries vd
+        JOIN donations d ON vd.donation_id = d.id
+        JOIN users u ON vd.donor_id = u.id
+        JOIN users cu ON vd.consumer_id = cu.id
+        WHERE vd.volunteer_user_id = ?
+          AND vd.status IN ('delivered','cancelled')
+        ORDER BY vd.updated_at DESC LIMIT ?
+    ");
+    $limit = (int)$limit;
+    $stmt->bindValue(1, $volunteer_user_id, PDO::PARAM_INT);
+    $stmt->bindValue(2, $limit, PDO::PARAM_INT);
+    $stmt->execute();
+    return $stmt->fetchAll();
+}
+
+/**
+ * Accept a delivery as a volunteer.
+ */
+function accept_volunteer_delivery($pdo, $delivery_id, $volunteer_user_id) {
+    $stmt = $pdo->prepare("SELECT * FROM volunteer_deliveries WHERE id = ? AND status = 'assigned' AND volunteer_user_id IS NULL");
+    $stmt->execute([$delivery_id]);
+    $delivery = $stmt->fetch();
+    if (!$delivery) return false;
+
+    // Prevent race condition: UPDATE checks volunteer_user_id IS NULL, so only one volunteer can accept
+    $stmt = $pdo->prepare("UPDATE volunteer_deliveries SET volunteer_user_id = ?, status = 'accepted', accepted_at = NOW() WHERE id = ? AND status = 'assigned' AND volunteer_user_id IS NULL");
+    $stmt->execute([$volunteer_user_id, $delivery_id]);
+    if ($stmt->rowCount() === 0) {
+        return false;
+    }
+
+    // Notify donor
+    $dStmt = $pdo->prepare("SELECT food_item FROM donations WHERE id = ?");
+    $dStmt->execute([$delivery['donation_id']]);
+    $food = $dStmt->fetchColumn();
+
+    $vStmt = $pdo->prepare("SELECT full_name FROM volunteers WHERE user_id = ?");
+    $vStmt->execute([$volunteer_user_id]);
+    $volName = $vStmt->fetchColumn() ?: 'A volunteer';
+
+    create_notification($pdo, $delivery['donor_id'], 'delivery_accepted',
+        $volName . ' has accepted the delivery for "' . $food . '". They will contact you for pickup.',
+        'dashboard.php?page=manage-donation', true);
+    create_notification($pdo, $delivery['consumer_id'], 'delivery_accepted',
+        $volName . ' has accepted the delivery for "' . $food . '". They will deliver to you.',
+        'dashboard.php?page=track-request', true);
+
+    return true;
+}
+
+/**
+ * Update volunteer delivery status (picked_up, in_transit, delivered).
+ */
+function update_delivery_status($pdo, $delivery_id, $volunteer_user_id, $new_status, $notes = null) {
+    $valid = ['picked_up', 'in_transit', 'delivered'];
+    if (!in_array($new_status, $valid)) return false;
+
+    $stmt = $pdo->prepare("SELECT * FROM volunteer_deliveries WHERE id = ? AND volunteer_user_id = ?");
+    $stmt->execute([$delivery_id, $volunteer_user_id]);
+    $delivery = $stmt->fetch();
+    if (!$delivery) return false;
+
+    $timeCol = $new_status . '_at';
+    $pdo->beginTransaction();
+
+    $stmt = $pdo->prepare("UPDATE volunteer_deliveries SET status = ?, $timeCol = NOW(), delivery_notes = COALESCE(?, delivery_notes) WHERE id = ?");
+    $stmt->execute([$new_status, $notes, $delivery_id]);
+
+    $dStmt = $pdo->prepare("SELECT food_item FROM donations WHERE id = ?");
+    $dStmt->execute([$delivery['donation_id']]);
+    $food = $dStmt->fetchColumn();
+
+    if ($new_status === 'picked_up') {
+        create_notification($pdo, $delivery['donor_id'], 'delivery_picked_up',
+            'Volunteer has picked up "' . $food . '" and is on the way.',
+            'dashboard.php?page=manage-donation', true);
+        create_notification($pdo, $delivery['consumer_id'], 'delivery_picked_up',
+            'Your food "' . $food . '" has been picked up by the volunteer!',
+            'dashboard.php?page=track-request', true);
+    } elseif ($new_status === 'in_transit') {
+        create_notification($pdo, $delivery['consumer_id'], 'delivery_in_transit',
+            'Your food "' . $food . '" is in transit! The volunteer is on their way.',
+            'dashboard.php?page=track-request', true);
+    } elseif ($new_status === 'delivered') {
+        // Mark donation as completed
+        $pdo->prepare("UPDATE donations SET status = 'completed' WHERE id = ?")->execute([$delivery['donation_id']]);
+        $pdo->prepare("UPDATE requests SET status = 'completed' WHERE id = ?")->execute([$delivery['request_id']]);
+
+        // Update volunteer stats
+        $pdo->prepare("UPDATE volunteers SET completed_deliveries = completed_deliveries + 1, community_points = community_points + 10 WHERE user_id = ?")->execute([$volunteer_user_id]);
+
+        create_notification($pdo, $delivery['donor_id'], 'delivery_completed',
+            'Your donation "' . $food . '" has been delivered by the volunteer! Please rate the receiver.',
+            'dashboard.php?page=track-donation&rate_donation=' . $delivery['donation_id'], true);
+        create_notification($pdo, $delivery['consumer_id'], 'delivery_completed',
+            'Your food "' . $food . '" has been delivered! Please confirm and rate the donor.',
+            'dashboard.php?page=track-request&rate_donation=' . $delivery['donation_id'], true);
+
+        // Generate certificate
+        $dDonor = $pdo->prepare("SELECT u.name FROM donations d JOIN users u ON d.donor_id = u.id WHERE d.id = ?");
+        $dDonor->execute([$delivery['donation_id']]);
+        $donorName = $dDonor->fetchColumn() ?: 'Donor';
+        $dRec = $pdo->prepare("SELECT name FROM users WHERE id = ?");
+        $dRec->execute([$delivery['consumer_id']]);
+        $recName = $dRec->fetchColumn() ?: 'Community';
+        generate_donation_certificate($pdo, $delivery['donation_id'], $donorName, $food, $recName);
+    }
+
+    $pdo->commit();
+    return true;
+}
+
+/**
+ * Get delivery by donation ID.
+ */
+function get_delivery_by_donation($pdo, $donation_id) {
+    $stmt = $pdo->prepare("SELECT * FROM volunteer_deliveries WHERE donation_id = ?");
+    $stmt->execute([$donation_id]);
+    return $stmt->fetch();
+}
+
+/**
+ * Get all volunteer deliveries (for admin).
+ */
+function get_all_volunteer_deliveries($pdo, $status = null, $limit = 50) {
+    $limit = (int)$limit;
+    $sql = "
+        SELECT vd.*, d.food_item, d.quantity, d.pickup_address,
+               u.name AS donor_name, cu.name AS consumer_name,
+               vu.name AS volunteer_name, vol.vehicle_type
+        FROM volunteer_deliveries vd
+        JOIN donations d ON vd.donation_id = d.id
+        JOIN users u ON vd.donor_id = u.id
+        JOIN users cu ON vd.consumer_id = cu.id
+        LEFT JOIN users vu ON vd.volunteer_user_id = vu.id
+        LEFT JOIN volunteers vol ON vd.volunteer_user_id = vol.user_id
+    ";
+    if ($status && in_array($status, ['assigned','accepted','picked_up','in_transit','delivered','cancelled'])) {
+        $sql .= " WHERE vd.status = ?";
+        $stmt = $pdo->prepare($sql . " ORDER BY vd.created_at DESC LIMIT ?");
+        $stmt->bindValue(1, $status, PDO::PARAM_STR);
+        $stmt->bindValue(2, $limit, PDO::PARAM_INT);
+        $stmt->execute();
+    } else {
+        $stmt = $pdo->prepare($sql . " ORDER BY vd.created_at DESC LIMIT ?");
+        $stmt->bindValue(1, $limit, PDO::PARAM_INT);
+        $stmt->execute();
+    }
+    return $stmt->fetchAll();
+}
+
+/**
+ * Get comprehensive volunteer delivery activity statistics for the admin dashboard.
+ * Returns counts for each delivery status plus volunteer performance metrics.
+ */
+function get_volunteer_activity_stats($pdo) {
+    $stats = [];
+    foreach (['assigned','accepted','picked_up','in_transit','delivered','cancelled'] as $status) {
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM volunteer_deliveries WHERE status = ?");
+        $stmt->execute([$status]);
+        $stats[$status] = (int)$stmt->fetchColumn();
+    }
+    $stats['total'] = array_sum($stats);
+    $stats['active'] = $stats['accepted'] + $stats['picked_up'] + $stats['in_transit'];
+    
+    // Top volunteers by completed deliveries
+    $stmt = $pdo->query("
+        SELECT vu.name AS volunteer_name, COUNT(vd.id) AS completed_count
+        FROM volunteer_deliveries vd
+        JOIN users vu ON vd.volunteer_user_id = vu.id
+        WHERE vd.status = 'delivered'
+        GROUP BY vd.volunteer_user_id
+        ORDER BY completed_count DESC
+        LIMIT 5
+    ");
+    $stats['top_volunteers'] = $stmt->fetchAll();
+    
+    // Recent activity (last 10 events)
+    $stmt = $pdo->query("
+        SELECT vd.id, vd.status, vd.updated_at, d.food_item,
+               vu.name AS volunteer_name, u.name AS donor_name, cu.name AS consumer_name
+        FROM volunteer_deliveries vd
+        JOIN donations d ON vd.donation_id = d.id
+        LEFT JOIN users vu ON vd.volunteer_user_id = vu.id
+        JOIN users u ON vd.donor_id = u.id
+        JOIN users cu ON vd.consumer_id = cu.id
+        ORDER BY vd.updated_at DESC
+        LIMIT 10
+    ");
+    $stats['recent_activity'] = $stmt->fetchAll();
+    
+    return $stats;
+}
+
+/**
+ * Get count of volunteers by status.
+ */
+function get_volunteer_counts($pdo) {
+    $counts = [];
+    foreach (['pending', 'approved', 'rejected', 'suspended'] as $status) {
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM volunteers WHERE status = ?");
+        $stmt->execute([$status]);
+        $counts[$status] = (int)$stmt->fetchColumn();
+    }
+    $stmt = $pdo->query("SELECT COUNT(*) FROM volunteers");
+    $counts['total'] = (int)$stmt->fetchColumn();
+    return $counts;
+}
+
+/**
+ * Generate a unique Volunteer ID.
+ */
+function generate_volunteer_id($pdo) {
+    $prefix = 'SV';
+    $year = date('Y');
+    $stmt = $pdo->query("SELECT COUNT(*) FROM volunteers WHERE status = 'approved'");
+    $count = (int)$stmt->fetchColumn() + 1;
+    return $prefix . $year . str_pad($count, 5, '0', STR_PAD_LEFT);
+}
+
+/**
+ * Approve a volunteer application.
+ */
+function approve_volunteer($pdo, $volunteer_id, $admin_id) {
+    $vid = generate_volunteer_id($pdo);
+    $stmt = $pdo->prepare("UPDATE volunteers SET status = 'approved', verified_by = ?, approved_at = NOW(), volunteer_id = ? WHERE id = ?");
+    $stmt->execute([$admin_id, $vid, $volunteer_id]);
+    
+    // Get user_id to send notification
+    $stmt = $pdo->prepare("SELECT user_id, full_name FROM volunteers WHERE id = ?");
+    $stmt->execute([$volunteer_id]);
+    $vol = $stmt->fetch();
+    
+    if ($vol) {
+        create_notification($pdo, $vol['user_id'], 'volunteer_approved',
+            'Congratulations ' . $vol['full_name'] . '! Your volunteer application has been approved. Your Volunteer ID is ' . $vid . '. You can now access the volunteer dashboard and accept delivery requests.',
+            'dashboard.php?page=volunteer', true);
+    }
+    
+    return $vid;
+}
+
+/**
+ * Reject a volunteer application.
+ */
+function reject_volunteer($pdo, $volunteer_id, $reason) {
+    $stmt = $pdo->prepare("UPDATE volunteers SET status = 'rejected', rejected_reason = ? WHERE id = ?");
+    $stmt->execute([$reason, $volunteer_id]);
+    
+    // Notify user
+    $stmt = $pdo->prepare("SELECT user_id, full_name FROM volunteers WHERE id = ?");
+    $stmt->execute([$volunteer_id]);
+    $vol = $stmt->fetch();
+    
+    if ($vol) {
+        create_notification($pdo, $vol['user_id'], 'volunteer_rejected',
+            'Dear ' . $vol['full_name'] . ', your volunteer application has been reviewed and was not approved at this time. Reason: ' . $reason . '. You can update your details and reapply.',
+            'become-volunteer.php', true);
+    }
+}
+
+/**
+ * Cancel a pending volunteer application (user self-service).
+ */
+function cancel_volunteer_application($pdo, $user_id) {
+    $stmt = $pdo->prepare("DELETE FROM volunteers WHERE user_id = ? AND status = 'pending'");
+    $stmt->execute([$user_id]);
+    
+    if ($stmt->rowCount() > 0) {
+        create_notification($pdo, $user_id, 'volunteer_cancelled',
+            'Your volunteer application has been cancelled as requested. You can reapply whenever you are ready.',
+            'become-volunteer.php', false);
+        return true;
+    }
+    return false;
+}
+
+/**
+ * Suspend a volunteer.
+ */
+function suspend_volunteer($pdo, $volunteer_id, $reason) {
+    $stmt = $pdo->prepare("UPDATE volunteers SET status = 'suspended', rejected_reason = ? WHERE id = ?");
+    $stmt->execute([$reason, $volunteer_id]);
+    
+    $stmt = $pdo->prepare("SELECT user_id, full_name FROM volunteers WHERE id = ?");
+    $stmt->execute([$volunteer_id]);
+    $vol = $stmt->fetch();
+    
+    if ($vol) {
+        create_notification($pdo, $vol['user_id'], 'volunteer_suspended',
+            'Dear ' . $vol['full_name'] . ', your volunteer status has been suspended. Reason: ' . $reason . '. Please contact the admin for more information.',
+            'dashboard.php', true);
+    }
+}
+
+
+
+// ═════════════════════════════════════════════════════════════════
+// SMTP EMAIL SENDING FUNCTIONS
+// ═════════════════════════════════════════════════════════════════
+
+/**
+ * Send email using SMTP via PHPMailer.
+ * Falls back to PHP mail() if SMTP is not configured or fails.
+ *
+ * @param PDO    $pdo         Database connection (needed to fetch SMTP settings)
+ * @param string $to          Recipient email
+ * @param string $subject     Email subject
+ * @param string $body        Plain text body
+ * @param string $htmlBody    Optional HTML body (if empty, plain text is used)
+ * @param array  $attachments Optional file paths to attach
+ * @param string $fromName    Optional sender name override
+ * @return array ['success' => bool, 'method' => 'smtp'|'mail'|'none', 'message' => string]
+ */
+function send_email_smtp($pdo, $to, $subject, $body, $htmlBody = '', $attachments = [], $fromName = '') {
+    // Try SMTP first
+    $autoloadFile = __DIR__ . '/vendor/autoload.php';
+    if (file_exists($autoloadFile)) {
+        @include_once $autoloadFile;
+        if (class_exists('PHPMailer\PHPMailer\PHPMailer')) {
+            try {
+                $settings = false;
+                try {
+                    $stmt = $pdo->prepare("SELECT * FROM smtp_settings WHERE is_active = 1 AND host != '' ORDER BY id DESC LIMIT 1");
+                    $stmt->execute();
+                    $settings = $stmt->fetch();
+                } catch (PDOException $e) {
+                    $settings = false;
+                }
+                
+                if ($settings && !empty($settings['host'])) {
+                    $mail = new PHPMailer\PHPMailer\PHPMailer(true);
+                    $mail->isSMTP();
+                    $mail->Host       = $settings['host'];
+                    $mail->SMTPAuth   = !empty($settings['username']);
+                    $mail->Username   = $settings['username'];
+                    $mail->Password   = $settings['password'];
+                    $mail->Port       = (int)$settings['port'];
+                    $mail->CharSet    = 'UTF-8';
+                    $mail->SMTPDebug  = 0;
+                    
+                    if ($settings['encryption'] === 'tls') {
+                        $mail->SMTPSecure = PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_STARTTLS;
+                    } elseif ($settings['encryption'] === 'ssl') {
+                        $mail->SMTPSecure = PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_SMTPS;
+                    } else {
+                        $mail->SMTPAuth = false;
+                    }
+                    
+                    $fromEmail = !empty($settings['from_email']) ? $settings['from_email'] : 'noreply@sayog.local';
+                    $fromName  = !empty($fromName) ? $fromName : (!empty($settings['from_name']) ? $settings['from_name'] : 'Sayog');
+                    
+                    $mail->setFrom($fromEmail, $fromName);
+                    $mail->addAddress($to);
+                    $mail->Subject = $subject;
+                    
+                    if (!empty($htmlBody)) {
+                        $mail->isHTML(true);
+                        $mail->Body = $htmlBody;
+                        $mail->AltBody = $body;
+                    } else {
+                        $mail->isHTML(false);
+                        $mail->Body = $body;
+                    }
+                    
+                    foreach ($attachments as $file) {
+                        if (file_exists($file)) {
+                            $mail->addAttachment($file);
+                        }
+                    }
+                    
+                    $mail->send();
+                    return ['success' => true, 'method' => 'smtp', 'message' => 'Email sent via SMTP'];
+                }
+            } catch (Exception $e) {
+                // SMTP failed — silently fall through to PHP mail()
+            }
+        }
+    }
+    
+    // Fallback to PHP mail()
+    try {
+        $headers = "From: noreply@sayog.local\r\n" .
+                   "Content-Type: text/plain; charset=UTF-8\r\n" .
+                   "Reply-To: support@sayog.local\r\n";
+        $result = @mail($to, $subject, $body, $headers);
+        if ($result) {
+            return ['success' => true, 'method' => 'mail', 'message' => 'Email sent via PHP mail()'];
+        }
+        return ['success' => false, 'method' => 'mail', 'message' => 'PHP mail() failed to send'];
+    } catch (Exception $e) {
+        return ['success' => false, 'method' => 'none', 'message' => 'Unable to send email: ' . $e->getMessage()];
+    }
+}
+
+
+// ═════════════════════════════════════════════════════════════════
+// EMAIL OTP VERIFICATION FUNCTIONS
+// ═════════════════════════════════════════════════════════════════
+
+/**
+ * Generate a random 6-digit OTP.
+ */
+function generate_otp() {
+    return str_pad((string)random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+}
+
+/**
+ * Send OTP email to the user.
+ */
+function send_otp_email($pdo, $email, $otp, $name = '') {
+    $subject = "Your Sayog Registration OTP";
+    $body = "
+Hello " . ($name ?: 'there') . ",
+
+Thank you for registering on Sayog! Your email verification OTP is:
+
+    " . $otp . "
+
+This OTP is valid for 5 minutes. Please enter it on the verification page to complete your registration.
+
+If you did not request this, you can safely ignore this email.
+
+Best regards,
+The Sayog Team
+";
+    
+    $htmlBody = '
+    <!DOCTYPE html>
+    <html>
+    <head><meta charset="UTF-8"></head>
+    <body style="margin:0;padding:0;background-color:#f4f7f6;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,sans-serif;">
+        <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f7f6;padding:30px 10px;">
+            <tr><td align="center">
+                <table width="560" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,0.08);">
+                    <tr>
+                        <td style="background:linear-gradient(135deg,#059669,#047857);padding:32px 40px;text-align:center;">
+                            <h1 style="color:#ffffff;margin:0;font-size:24px;font-weight:700;">Sayog</h1>
+                            <p style="color:#a7f3d0;margin:6px 0 0 0;font-size:14px;">Connecting surplus food with communities</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="padding:36px 40px 28px;">
+                            <h2 style="color:#1f2937;margin:0 0 8px 0;font-size:20px;">Email Verification</h2>
+                            <p style="color:#6b7280;margin:0 0 24px 0;font-size:15px;line-height:1.6;">Hello ' . htmlspecialchars($name ?: 'there') . ',</p>
+                            <p style="color:#6b7280;margin:0 0 20px 0;font-size:15px;line-height:1.6;">Thank you for registering on <strong>Sayog</strong>! Use the OTP below to verify your email address. This code expires in <strong>5 minutes</strong>.</p>
+                            <div style="background:#f9fafb;border:2px dashed #d1d5db;border-radius:12px;padding:20px;text-align:center;margin:0 0 24px 0;">
+                                <div style="font-size:36px;font-weight:800;letter-spacing:8px;color:#059669;font-family:monospace;">' . $otp . '</div>
+                            </div>
+                            <p style="color:#9ca3af;margin:0 0 20px 0;font-size:13px;line-height:1.5;">If you did not request this verification, you can safely ignore this email.</p>
+                            <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0;">
+                            <p style="color:#9ca3af;margin:0;font-size:12px;line-height:1.5;">Sayog &mdash; Built to connect surplus food with communities. If you have any questions, contact support@sayog.local</p>
+                        </td>
+                    </tr>
+                </table>
+            </td></tr>
+        </table>
+    </body>
+    </html>
+    ';
+    
+    $result = send_email_smtp($pdo, $email, $subject, $body, $htmlBody);
+    return $result['success'];
+}
+
+/**
+ * Store OTP in the database for a given email.
+ * Clears any existing OTPs for that email first.
+ */
+function store_otp($pdo, $email, $otp) {
+    // Clean up expired OTPs for this email
+    $stmt = $pdo->prepare("DELETE FROM email_verifications WHERE email = ?");
+    $stmt->execute([$email]);
+    
+    // Store new OTP with 10-minute expiry
+    $stmt = $pdo->prepare("INSERT INTO email_verifications (email, otp, expires_at, attempts) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 5 MINUTE), 0)");
+    $stmt->execute([$email, $otp]);
+    
+    // Also clean up any other expired records
+    cleanup_expired_otps($pdo);
+    return true;
+}
+
+/**
+ * Verify an OTP for a given email.
+ * Returns true if valid, false otherwise.
+ * Implements rate limiting: max 5 attempts per OTP.
+ */
+function verify_otp($pdo, $email, $otp) {
+    // Find the latest valid OTP record
+    $stmt = $pdo->prepare("SELECT id, attempts FROM email_verifications WHERE email = ? AND expires_at > NOW() AND verified = 0 ORDER BY created_at DESC LIMIT 1");
+    $stmt->execute([$email]);
+    $row = $stmt->fetch();
+    
+    if (!$row) {
+        return 'expired'; // No valid OTP found (expired or already verified)
+    }
+    
+    // Check rate limit: max 5 attempts
+    if ((int)$row['attempts'] >= 5) {
+        return 'locked'; // Too many failed attempts
+    }
+    
+    // Increment attempts
+    $stmt = $pdo->prepare("UPDATE email_verifications SET attempts = attempts + 1 WHERE id = ?");
+    $stmt->execute([$row['id']]);
+    
+    // Check if OTP matches
+    $stmt = $pdo->prepare("SELECT id FROM email_verifications WHERE id = ? AND otp = ?");
+    $stmt->execute([$row['id'], $otp]);
+    $match = $stmt->fetch();
+    
+    if ($match) {
+        // Valid OTP — mark as verified
+        $stmt = $pdo->prepare("UPDATE email_verifications SET verified = 1 WHERE id = ?");
+        $stmt->execute([$match['id']]);
+        return true;
+    }
+    
+    return false;
+}
+
+/**
+ * Clean up expired OTP records.
+ */
+function cleanup_expired_otps($pdo) {
+    $stmt = $pdo->prepare("DELETE FROM email_verifications WHERE expires_at < NOW()");
+    $stmt->execute();
+}
 
 
 ?>

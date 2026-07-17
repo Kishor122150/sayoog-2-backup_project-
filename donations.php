@@ -6,147 +6,23 @@ $pdo->exec("UPDATE donations SET status = 'cancelled' WHERE status IN ('availabl
 
 $donations = get_available_donations($pdo);
 ?>
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Food Listings | Sayog</title>
-    <link rel="stylesheet" href="style.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <script src="js/app.js"></script>
+<?php
+$page_title = 'Food Listings | Sayog';
+$active_page = 'donations';
+require_once 'header.php';
+?>
     <style>
-      /* ===== MOBILE NAVIGATION — Hamburger Menu ===== */
-      .mobile-nav-toggle {
-        display: none;
-        background: none;
-        border: none;
-        font-size: 24px;
-        color: var(--text-primary, #0f172a);
-        cursor: pointer;
-        padding: 8px;
-        line-height: 1;
-        z-index: 1100;
-        position: relative;
-        transition: color 0.3s ease;
-      }
-      .mobile-nav-toggle:hover {
-        color: var(--primary, #10b981);
-      }
-
-      .mobile-nav-overlay {
-        display: none;
-        position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background: rgba(0, 0, 0, 0.45);
-        backdrop-filter: blur(4px);
-        -webkit-backdrop-filter: blur(4px);
-        z-index: 1050;
-        opacity: 0;
-        pointer-events: none;
-        transition: opacity 0.3s ease;
-      }
-      .mobile-nav-overlay.mobile-nav-open {
-        opacity: 1;
-        pointer-events: auto;
-      }
-
-      @media (max-width: 767px) {
-        .site-nav {
-          position: fixed;
-          top: 0;
-          left: 0;
-          bottom: 0;
-          width: 280px;
-          max-width: 85vw;
-          background: var(--surface, #ffffff);
-          box-shadow: 0 0 40px rgba(0, 0, 0, 0.15);
-          flex-direction: column;
-          align-items: stretch;
-          justify-content: flex-start;
-          padding: 80px 20px 24px;
-          gap: 4px;
-          z-index: 1090;
-          transform: translateX(-100%);
-          transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
-          overflow-y: auto;
-          display: flex !important;
-          flex-wrap: nowrap;
-        }
-        .site-nav.mobile-nav-open {
-          transform: translateX(0);
-        }
-        .site-nav a {
-          padding: 12px 16px;
-          font-size: 15px;
-          border-radius: 10px;
-          width: 100%;
-          justify-content: center;
-        }
-        .site-nav a[style*="background: #059669"] {
-          padding: 12px 16px;
-          font-size: 15px;
-          width: 100%;
-          justify-content: center;
-        }
-        .site-nav .theme-toggle,
-        .site-nav .lang-toggle {
-          width: 100%;
-          justify-content: center;
-          padding: 12px 16px;
-          font-size: 14px;
-          margin-left: 0 !important;
-          margin-top: 4px;
-        }
-        .mobile-nav-toggle {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-        }
-        .mobile-nav-overlay {
-          display: block;
-        }
-        .mobile-nav-overlay.mobile-nav-open {
-          display: block;
-        }
-
-        [data-theme="dark"] .site-nav {
-          background: var(--surface, #1e293b);
-          box-shadow: 0 0 40px rgba(0, 0, 0, 0.4);
-        }
-      }
+    /* Nepal Map Pin System */
+    .map-toolbar { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px 16px; margin-bottom: 16px; box-shadow: var(--shadow-sm); }
+    .map-cluster-icon { background: linear-gradient(135deg, #059669 0%, #10b981 100%); color: #fff; border: 3px solid rgba(255,255,255,0.6); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
+    .map-cluster-icon-small { width:36px;height:36px;font-size:12px; } .map-cluster-icon-medium { width:44px;height:44px;font-size:14px; } .map-cluster-icon-large { width:52px;height:52px;font-size:16px; }
+    .donor-marker-icon { background:#059669;color:#fff;width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.3);font-size:16px; }
+    .user-location-pulse { width:14px;height:14px;background:#3b82f6;border-radius:50%;border:3px solid #fff;box-shadow:0 0 0 4px rgba(59,130,246,0.3),0 2px 8px rgba(0,0,0,0.3);animation:userPulse 2s ease-in-out infinite; }
+    @keyframes userPulse { 0%,100%{box-shadow:0 0 0 4px rgba(59,130,246,0.3),0 2px 8px rgba(0,0,0,0.3)} 50%{box-shadow:0 0 0 8px rgba(59,130,246,0.1),0 2px 8px rgba(0,0,0,0.3)} }
+    input[type=range]::-webkit-slider-runnable-track { height:4px;background:#d1d5db;border-radius:4px; }
+    input[type=range]::-webkit-slider-thumb { -webkit-appearance:none;height:16px;width:16px;border-radius:50%;background:#059669;margin-top:-6px;cursor:pointer;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.2); }
     </style>
-</head>
-<body>
-    <!-- Mobile Nav Overlay -->
-    <div class="mobile-nav-overlay" id="mobileNavOverlay"></div>
 
-    <header class="site-header">
-        <button class="mobile-nav-toggle" id="mobileNavToggle" aria-label="Toggle navigation menu">
-            <i class="fa-solid fa-bars"></i>
-        </button>
-        <div class="site-branding">
-            <a href="index.php" class="site-logo"><i class="fa-solid fa-hand-holding-heart"></i> Sayog</a>
-        </div>
-        <nav class="site-nav" id="mobileNav">
-            <a href="index.php" data-i18n="nav.home">Home</a>
-            <a href="donations.php" class="active" style="color: #059669;" data-i18n="nav.food_listings">Food Listings</a>
-            <a href="about.php" data-i18n="nav.about">About</a>
-            <a href="contact.php" data-i18n="nav.contact">Contact</a>
-            <a href="login.php" data-i18n="nav.login">Login</a>
-            <!-- <a href="register.php">Get Started</a> -->
-            <a href="register.php" style="background: #059669; color:#fff" data-i18n="nav.get_started">Get Started</a>
-            <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme" style="margin-left:4px;">
-                <i class="fa-solid fa-moon"></i>
-            </button>
-            <button class="lang-toggle" onclick="toggleLanguage()" style="background:rgba(59,130,246,0.1);">
-                <span>नेपाली</span>
-            </button>
-        </nav>
-    </header>
 
     <main class="site-main">
         <section class="section-block">
@@ -156,28 +32,57 @@ $donations = get_available_donations($pdo);
             </div>
 
             <?php if (!empty($donations)): ?>
-                <!-- Search Toolbar -->
-                <div class="home-toolbar" style="margin-bottom:24px;">
-                    <div class="home-search">
-                        <i class="fa-solid fa-magnifying-glass"></i>
-                        <input type="text" id="searchFoodName" class="form-control" placeholder="Search by food name..." style="padding-left:40px;">
+                                <!-- Enhanced Search Toolbar - Nepal Map -->
+                <div class="map-toolbar">
+                    <div class="map-toolbar-row" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px;">
+                        <div class="home-search" style="flex:1;min-width:160px;">
+                            <i class="fa-solid fa-magnifying-glass"></i>
+                            <input type="text" id="searchFoodName" class="form-control" placeholder="Food name..." style="padding-left:36px;">
+                        </div>
+                        <div class="home-search" style="flex:1;min-width:160px;">
+                            <i class="fa-solid fa-location-dot"></i>
+                            <input type="text" id="searchLocation" class="form-control" placeholder="Address..." style="padding-left:36px;">
+                        </div>
+                        <div class="home-search" style="flex:0 1 auto;min-width:130px;">
+                            <i class="fa-solid fa-city"></i>
+                            <select id="cityFilter" class="form-control" style="padding-left:36px;">
+                                <option value="">All Cities</option>
+                                <option value="Kathmandu">Kathmandu</option>
+                                <option value="Lalitpur">Lalitpur</option>
+                                <option value="Bhaktapur">Bhaktapur</option>
+                                <option value="Pokhara">Pokhara</option>
+                                <option value="Bharatpur">Bharatpur</option>
+                                <option value="Birgunj">Birgunj</option>
+                                <option value="Biratnagar">Biratnagar</option>
+                                <option value="Janakpur">Janakpur</option>
+                                <option value="Butwal">Butwal</option>
+                                <option value="Dharan">Dharan</option>
+                                <option value="Nepalgunj">Nepalgunj</option>
+                                <option value="Chitwan">Chitwan</option>
+                                <option value="Hetauda">Hetauda</option>
+                                <option value="Dhangadhi">Dhangadhi</option>
+                                <option value="Itahari">Itahari</option>
+                            </select>
+                        </div>
+                        <div class="filter-chips">
+                            <button class="filter-chip active" data-filter="all" onclick="window.filterDonations('all')">All</button>
+                            <button class="filter-chip" data-filter="nearby" onclick="window.filterDonations('nearby')">Nearby</button>
+                        </div>
                     </div>
-                    <div class="home-search">
-                        <i class="fa-solid fa-location-dot"></i>
-                        <input type="text" id="searchLocation" class="form-control" placeholder="Search by location..." style="padding-left:40px;">
+                    <div class="map-toolbar-row" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+                        <div style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-secondary);">
+                            <i class="fa-solid fa-ruler"></i>
+                            <span id="radiusLabel">Radius: 10 km</span>
+                            <input type="range" id="radiusFilter" min="1" max="50" value="10" step="1" style="width:100px;accent-color:#059669;" oninput="document.getElementById('radiusLabel').textContent='Radius: '+this.value+' km';window.filterDonations(document.querySelector('.filter-chip.active')?.dataset?.filter||'all');">
+                        </div>
+                        <span id="mapResultsCount" class="badge badge-success" style="font-size:12px;"><?php echo count($donations); ?> donations</span>
                     </div>
-                    <div class="filter-chips">
-                        <button class="filter-chip active" data-filter="all" onclick="window.filterDonations('all')">All</button>
-                        <button class="filter-chip" data-filter="nearby" onclick="window.filterDonations('nearby')">Nearby</button>
-                    </div>
-                </div>
 
                 <!-- Interactive Map Section -->
                 <div class="map-section">
                     <div class="map-section-header">
                         <i class="fa-solid fa-map-location-dot"></i>
                         <h3>Donation Locations <span style="font-weight:400;color:var(--text-muted);font-size:13px;">— Click markers for details &amp; directions</span></h3>
-                        <span id="mapResultsCount" class="badge badge-success" style="margin-left:auto;font-size:12px;"><?php echo count($donations); ?> donations</span>
                     </div>
                     <div class="map-container" id="donationsMap"></div>
                 </div>
@@ -192,7 +97,7 @@ $donations = get_available_donations($pdo);
             <?php else: ?>
                 <div id="donationsGrid" class="product-grid">
                     <?php foreach ($donations as $d): ?>
-                        <article class="product-card" data-donation-id="<?php echo $d['id']; ?>" data-food-item="<?php echo htmlspecialchars(strtolower($d['food_item'])); ?>" data-pickup-address="<?php echo htmlspecialchars(strtolower($d['pickup_address'])); ?>">
+                        <article class="product-card" data-donation-id="<?php echo $d['id']; ?>" data-food-item="<?php echo htmlspecialchars(strtolower($d['food_item'])); ?>" data-pickup-address="<?php echo htmlspecialchars(strtolower($d['pickup_address'])); ?>" data-donor-name="<?php echo htmlspecialchars($d['donor_name']); ?>">
                             <div class="product-card-image">
                                 <?php if (!empty($d['image_path'])): ?>
                                     <img src="<?php echo htmlspecialchars($d['image_path']); ?>" alt="<?php echo htmlspecialchars($d['food_item']); ?>">
@@ -238,7 +143,10 @@ $donations = get_available_donations($pdo);
                 id: <?php echo $d['id']; ?>,
                 food_item: <?php echo json_encode($d['food_item']); ?>,
                 address: <?php echo json_encode($d['pickup_address']); ?>,
-                pickup_address: <?php echo json_encode($d['pickup_address']); ?>
+                pickup_address: <?php echo json_encode($d['pickup_address']); ?>,
+                latitude: <?php echo !empty($d['latitude']) ? $d['latitude'] : 'null'; ?>,
+                longitude: <?php echo !empty($d['longitude']) ? $d['longitude'] : 'null'; ?>,
+                city: <?php echo !empty($d['city']) ? json_encode($d['city']) : 'null'; ?>
             },
             <?php endforeach; ?>
         ];
@@ -249,60 +157,4 @@ $donations = get_available_donations($pdo);
     </script>
     <?php endif; ?>
 
-    <footer class="site-footer">
-        <p>&copy; <?php echo date('Y'); ?> Sayog. Connecting surplus food with communities.</p>
-    </footer>
-
-  <script>
-    (function() {
-      var toggle = document.getElementById('mobileNavToggle');
-      var nav = document.getElementById('mobileNav');
-      var overlay = document.getElementById('mobileNavOverlay');
-      var icon = toggle ? toggle.querySelector('i') : null;
-
-      if (!toggle || !nav || !overlay) return;
-
-      function openMenu() {
-        nav.classList.add('mobile-nav-open');
-        overlay.classList.add('mobile-nav-open');
-        if (icon) {
-          icon.className = 'fa-solid fa-xmark';
-        }
-        toggle.setAttribute('aria-label', 'Close navigation menu');
-        document.body.style.overflow = 'hidden';
-      }
-
-      function closeMenu() {
-        nav.classList.remove('mobile-nav-open');
-        overlay.classList.remove('mobile-nav-open');
-        if (icon) {
-          icon.className = 'fa-solid fa-bars';
-        }
-        toggle.setAttribute('aria-label', 'Toggle navigation menu');
-        document.body.style.overflow = '';
-      }
-
-      toggle.addEventListener('click', function(e) {
-        e.stopPropagation();
-        if (nav.classList.contains('mobile-nav-open')) {
-          closeMenu();
-        } else {
-          openMenu();
-        }
-      });
-
-      overlay.addEventListener('click', closeMenu);
-
-      nav.querySelectorAll('a').forEach(function(link) {
-        link.addEventListener('click', closeMenu);
-      });
-
-      document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape' && nav.classList.contains('mobile-nav-open')) {
-          closeMenu();
-        }
-      });
-    })();
-  </script>
-</body>
-</html>
+    <?php require_once 'footer.php'; ?>

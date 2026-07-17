@@ -322,407 +322,202 @@ const translations = {
     };
 })();
 
+
 // ============================================================
-// INTERACTIVE MAP — Leaflet + OpenStreetMap with distance calculation
+// INTERACTIVE NEPAL MAP — Leaflet + MarkerCluster + City Search
 // ============================================================
 (function() {
     'use strict';
 
     var _mapCache = {};
-    var _markerMap = {}; // id -> { marker, lat, lng, donation }
-    var _donationsMap = null;
+    var _markerMap = {};
     var _mapInstance = null;
     var _mapUserLat = null;
     var _mapUserLng = null;
+    var _markerClusterGroup = null;
 
-    /**
-     * Calculate distance between two coordinates using the Haversine formula
-     */
-    function haversineDistance(lat1, lng1, lat2, lng2) {
-        var R = 6371; // Earth's radius in km
-        var dLat = (lat2 - lat1) * Math.PI / 180;
-        var dLng = (lng2 - lng1) * Math.PI / 180;
-        var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-                Math.sin(dLng / 2) * Math.sin(dLng / 2);
-        var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-        return R * c;
-    }
+    var NEPAL_BOUNDS_RAW = [[26.3, 80.0], [30.5, 88.3]];
+    var NEPAL_CENTER = [28.2, 84.1];
 
-    /**
-     * Geocode an address using Nominatim (OpenStreetMap)
-     * Returns a promise with {lat, lng, displayName}
-     */
-    function geocodeAddress(address) {
-        if (_mapCache[address]) {
-            return Promise.resolve(_mapCache[address]);
-        }
-        var url = 'https://nominatim.openstreetmap.org/search?format=json&q=' +
-                  encodeURIComponent(address + ', Nepal') + '&limit=1';
-        return fetch(url, {
-            headers: { 'Accept-Language': 'en' }
-        })
-        .then(function(res) { return res.json(); })
-        .then(function(data) {
-            if (data && data.length > 0) {
-                var result = {
-                    lat: parseFloat(data[0].lat),
-                    lng: parseFloat(data[0].lon),
-                    displayName: data[0].display_name
-                };
-                _mapCache[address] = result;
-                return result;
-            }
-            // Try without 'Nepal' suffix for international addresses
-            var url2 = 'https://nominatim.openstreetmap.org/search?format=json&q=' +
-                  encodeURIComponent(address) + '&limit=1';
-            return fetch(url2, {
-                headers: { 'Accept-Language': 'en' }
-            })
-            .then(function(res) { return res.json(); })
-            .then(function(data2) {
-                if (data2 && data2.length > 0) {
-                    var result2 = {
-                        lat: parseFloat(data2[0].lat),
-                        lng: parseFloat(data2[0].lon),
-                        displayName: data2[0].display_name
-                    };
-                    _mapCache[address] = result2;
-                    return result2;
-                }
-                return null;
-            })
-            .catch(function() { return null; });
-        })
-        .catch(function() {
-            return null;
-        });
-    }
-
-    /**
-     * Filter donations by name and location search
-     */
-    window.filterDonations = function(filterType) {
-        var nameInput = document.getElementById('searchFoodName');
-        var locationInput = document.getElementById('searchLocation');
-        var nameQuery = nameInput ? nameInput.value.toLowerCase().trim() : '';
-        var locationQuery = locationInput ? locationInput.value.toLowerCase().trim() : '';
-
-        // Update active filter chip
-        document.querySelectorAll('.filter-chip').forEach(function(chip) {
-            chip.classList.remove('active');
-        });
-        if (filterType === 'all' || filterType === 'nearby') {
-            var activeChip = document.querySelector('.filter-chip[data-filter="' + filterType + '"]');
-            if (activeChip) activeChip.classList.add('active');
-        }
-
-        var visibleCount = 0;
-        var visibleBounds = [];
-
-        document.querySelectorAll('.product-card').forEach(function(card) {
-            var foodItem = (card.getAttribute('data-food-item') || '').toLowerCase();
-            var pickupAddress = (card.getAttribute('data-pickup-address') || '').toLowerCase();
-            var donationId = card.getAttribute('data-donation-id');
-
-            var matchesName = !nameQuery || foodItem.indexOf(nameQuery) !== -1;
-            var matchesLocation = !locationQuery || pickupAddress.indexOf(locationQuery) !== -1;
-
-            var showCard = matchesName && matchesLocation;
-
-            if (showCard && filterType === 'nearby') {
-                // For nearby filter, only show if we have user location AND distance data
-                var markerData = _markerMap[donationId];
-                if (!_mapUserLat || !_mapUserLng) {
-                    // Geolocation not available yet
-                    showCard = false;
-                } else if (markerData) {
-                    var dist = haversineDistance(_mapUserLat, _mapUserLng, markerData.lat, markerData.lng);
-                    showCard = dist <= 10; // Within 10 km
-                } else {
-                    showCard = false;
-                }
-            }
-
-            if (showCard) {
-                card.style.display = '';
-                visibleCount++;
-
-                // Show/hide corresponding map marker
-                var markerData = _markerMap[donationId];
-                if (markerData && markerData.marker) {
-                    markerData.marker.setOpacity(1);
-                    visibleBounds.push([markerData.lat, markerData.lng]);
-                }
-            } else {
-                card.style.display = 'none';
-                var markerData = _markerMap[donationId];
-                if (markerData && markerData.marker) {
-                    markerData.marker.setOpacity(0.2);
-                }
-            }
-        });
-
-        // Update count badge
-        var countBadge = document.getElementById('mapResultsCount');
-        if (countBadge) {
-            var total = document.querySelectorAll('.product-card').length;
-            countBadge.textContent = visibleCount + ' / ' + total + ' donations';
-        }
-
-        // Fit map to visible markers
-        if (_mapInstance && visibleBounds.length > 0) {
-            _mapInstance.fitBounds(visibleBounds, { padding: [50, 50], maxZoom: 15 });
-        }
+    var NEPAL_CITIES = {
+        'kathmandu': [27.7172, 85.3240], 'lalitpur': [27.6588, 85.3247], 'patan': [27.6588, 85.3247],
+        'bhaktapur': [27.6710, 85.4298], 'pokhara': [28.2096, 83.9856], 'bharatpur': [27.6833, 84.4333],
+        'birgunj': [27.0170, 84.8660], 'biratnagar': [26.4524, 87.2718], 'janakpur': [26.7288, 85.9248],
+        'nepalgunj': [28.0500, 81.6167], 'butwal': [27.6833, 83.4500], 'dharan': [26.8167, 87.2833],
+        'hetauda': [27.4167, 85.0333], 'dhangadhi': [28.6833, 80.6000], 'chitwan': [27.5333, 84.3333]
     };
 
-    /**
-     * Initialize a map with multiple markers (donations listing page)
-     */
+    function extractCity(addr) {
+        if (!addr) return '';
+        var a = addr.toLowerCase();
+        for (var c in NEPAL_CITIES) { if (a.indexOf(c) !== -1) return c.charAt(0).toUpperCase()+c.slice(1); }
+        return '';
+    }
+
+    function localGeocode(address) {
+        var a = address.toLowerCase().trim();
+        for (var c in NEPAL_CITIES) { if (a.indexOf(c) !== -1) return Promise.resolve({lat:NEPAL_CITIES[c][0],lng:NEPAL_CITIES[c][1]}); }
+        if (_mapCache[address]) return Promise.resolve(_mapCache[address]);
+        return fetch('https://nominatim.openstreetmap.org/search?format=json&q='+encodeURIComponent(address+', Nepal')+'&limit=1',
+            {headers:{'Accept-Language':'en','User-Agent':'Sayog/1.0'}})
+        .then(function(r){return r.json();}).then(function(d){
+            if(d&&d.length>0){var r={lat:parseFloat(d[0].lat),lng:parseFloat(d[0].lon)};_mapCache[address]=r;return r;}
+            return null;
+        }).catch(function(){return null;});
+    }
+
+    function hDist(lat1,lng1,lat2,lng2){var R=6371,dL=(lat2-lat1)*Math.PI/180,dLn=(lng2-lng1)*Math.PI/180,a=Math.sin(dL/2)*Math.sin(dL/2)+Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLn/2)*Math.sin(dLn/2);return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));}
+
+    window.filterDonations = function(filterType) {
+        var n=document.getElementById('searchFoodName'),l=document.getElementById('searchLocation'),c=document.getElementById('cityFilter'),r=document.getElementById('radiusFilter');
+        var nq=n?n.value.toLowerCase().trim():'',lq=l?l.value.toLowerCase().trim():'',sc=c?c.value:'',rk=r?parseFloat(r.value):10;
+        document.querySelectorAll('.filter-chip').forEach(function(f){f.classList.remove('active');});
+        var ac=document.querySelector('.filter-chip[data-filter="'+filterType+'"]');if(ac)ac.classList.add('active');
+        var vc=0,vb=[];
+        document.querySelectorAll('.product-card').forEach(function(cd){
+            var fi=(cd.getAttribute('data-food-item')||'').toLowerCase(),pa=(cd.getAttribute('data-pickup-address')||'').toLowerCase(),di=cd.getAttribute('data-donation-id');
+            var mn=!nq||fi.indexOf(nq)!==-1,ml=!lq||pa.indexOf(lq)!==-1,mc=true;
+            if(sc&&pa.indexOf(sc.toLowerCase())===-1)mc=false;
+            var sh=mn&&ml&&mc;
+            if(sh&&filterType==='nearby'){var md=_markerMap[di];if(!_mapUserLat||!_mapUserLng||!md||!md.lat)sh=false;else sh=hDist(_mapUserLat,_mapUserLng,md.lat,md.lng)<=rk;}
+            if(sh){cd.style.display='';vc++;var md=_markerMap[di];if(md&&md.marker){md.marker.setOpacity(1);vb.push([md.lat,md.lng]);}}else{cd.style.display='none';var md=_markerMap[di];if(md&&md.marker)md.marker.setOpacity(0.2);}
+        });
+        var cb=document.getElementById('mapResultsCount');if(cb){cb.textContent=vc+' / '+document.querySelectorAll('.product-card').length+' donations';}
+        if(_mapInstance&&vb.length>0)_mapInstance.fitBounds(L.latLngBounds(vb),{padding:[50,50],maxZoom:14});
+        else if(_mapInstance)_mapInstance.setView(NEPAL_CENTER,7);
+    };
+
     window.initDonationsMap = function(elementId, donations) {
         var container = document.getElementById(elementId);
         if (!container || !donations || !donations.length) return;
 
-        // Show loading
-        container.innerHTML = '<div class="map-loading"><i class="fa-solid fa-spinner fa-spin"></i> Loading map...</div>';
+        container.innerHTML = '<div class="map-loading"><i class="fa-solid fa-spinner fa-spin"></i> Loading Nepal map...</div>';
 
-        // Load Leaflet dynamically
-        if (typeof L === 'undefined') {
-            var link = document.createElement('link');
-            link.rel = 'stylesheet';
-            link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
-            document.head.appendChild(link);
-
-            var script = document.createElement('script');
-            script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-            script.onload = function() { buildMap(); };
-            document.head.appendChild(script);
-        } else {
-            buildMap();
+        function ensureCluster(cb) {
+            if (typeof L !== 'undefined' && typeof L.markerClusterGroup !== 'undefined') { cb(); return; }
+            var css1=document.createElement('link');css1.rel='stylesheet';css1.href='https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css';document.head.appendChild(css1);
+            var css2=document.createElement('link');css2.rel='stylesheet';css2.href='https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css';document.head.appendChild(css2);
+            var s=document.createElement('script');s.src='https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js';s.onload=cb;s.onerror=cb;document.head.appendChild(s);
         }
 
-        function buildMap() {
-            // Get user's location
-            if (navigator.geolocation) {
-                navigator.geolocation.getCurrentPosition(function(pos) {
-                    _mapUserLat = pos.coords.latitude;
-                    _mapUserLng = pos.coords.longitude;
+        function loadLeaflet(cb) {
+            if(typeof L!=='undefined'){ensureCluster(cb);return;}
+            var l=document.createElement('link');l.rel='stylesheet';l.href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';document.head.appendChild(l);
+            var s=document.createElement('script');s.src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';s.onload=function(){ensureCluster(cb);};document.head.appendChild(s);
+        }
 
-                    // Add user marker to map
-                    if (_mapInstance) {
-                        var userIcon = L.divIcon({
-                            className: 'user-location-marker',
-                            html: '<div style="background:#3b82f6;color:#fff;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.3);font-size:13px;"><i class="fa-solid fa-location-dot"></i></div>',
-                            iconSize: [28, 28],
-                            iconAnchor: [14, 14]
-                        });
-                        L.marker([_mapUserLat, _mapUserLng], { icon: userIcon }).addTo(_mapInstance)
-                            .bindPopup('<strong>You are here</strong>');
-                    }
-                }, function() {
-                    // Geolocation failed
-                }, { timeout: 8000 });
-            }
-
+        loadLeaflet(function() {
             container.innerHTML = '';
             var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-            _mapInstance = L.map(container).setView([27.7172, 85.3240], 11); // Default: Kathmandu
+            _mapInstance = L.map(container, {center: NEPAL_CENTER, zoom: 7, maxBounds: L.latLngBounds(NEPAL_BOUNDS_RAW), maxBoundsViscosity: 1.0});
 
-            // Use dark tiles in dark mode
-            var tileUrl = isDark
-                ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
-                : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-            var tileAttribution = isDark
-                ? '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>'
-                : '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
-
-            L.tileLayer(tileUrl, {
-                attribution: tileAttribution,
-                maxZoom: 18
+            L.tileLayer(isDark?'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png':'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+                attribution: isDark?'&copy; OSM &copy; CARTO':'&copy; OpenStreetMap contributors', maxZoom:18, minZoom:7
             }).addTo(_mapInstance);
 
-            var bounds = [];
-            var geocodePromises = [];
-            _markerMap = {};
-
-            // Process geocode requests with concurrency limit (max 2 at a time)
-            // to respect Nominatim's usage policy (~1 req/sec)
-            function processGeocodeQueue(queue, concurrency) {
-                var idx = 0;
-
-                function next() {
-                    if (idx >= queue.length) return Promise.resolve();
-                    var batch = [];
-                    for (var j = 0; j < concurrency && idx < queue.length; j++, idx++) {
-                        // Use IIFE to capture current item value (avoids var closure bug)
-                        (function() {
-                            var currentIdx = idx;
-                            var item = queue[currentIdx];
-                            var delay = j * 400;
-                            var p = new Promise(function(resolve) {
-                                setTimeout(function() {
-                                    geocodeAddress(item.address).then(function(coords) {
-                                        item.coords = coords;
-                                        resolve();
-                                    });
-                                }, delay);
-                            });
-                            batch.push(p);
-                        })();
-                    }
-                    return Promise.all(batch).then(function() {
-                        return next();
-                    });
-                }
-
-                return next();
-            }
-
-            var geocodeQueue = [];
-            donations.forEach(function(d) {
-                if (!d || typeof d !== 'object') return;
-                var address = d.address || d.pickup_address || '';
-                if (!address) return;
-                geocodeQueue.push({ id: d.id, address: address, food_item: d.food_item, d: d });
-            });
-
-            var totalToGeocode = geocodeQueue.length;
-            processGeocodeQueue(geocodeQueue, 2).then(function() {
-                geocodeQueue.forEach(function(item) {
-                    if (item.coords) {
-                        var coords = item.coords;
-                        var leafletIcon = L.divIcon({
-                            className: 'custom-marker',
-                            html: '<div style="background:#059669;color:#fff;width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.3);font-size:14px;"><i class="fa-solid fa-utensils"></i></div>',
-                            iconSize: [32, 32],
-                            iconAnchor: [16, 16],
-                            popupAnchor: [0, -20]
-                        });
-
-                        var marker = L.marker([coords.lat, coords.lng], { icon: leafletIcon }).addTo(_mapInstance);
-                        bounds.push([coords.lat, coords.lng]);
-
-                        // Store in marker map for filtering
-                        _markerMap[item.id] = { marker: marker, lat: coords.lat, lng: coords.lng, donation: item.d };
-
-                        var distText = '';
-                        if (_mapUserLat && _mapUserLng) {
-                            var dist = haversineDistance(_mapUserLat, _mapUserLng, coords.lat, coords.lng);
-                            distText = '<div class="popup-distance">📍 ' + dist.toFixed(1) + ' km away</div>';
-
-                            // Update distance on the card
-                            var distEl = document.querySelector('[data-donation-id="' + item.id + '"] .donation-distance');
-                            if (distEl) {
-                                distEl.innerHTML = '<i class="fa-solid fa-location-dot"></i> ' + dist.toFixed(1) + ' km away';
-                            }
-                        }
-
-                        var googleMapsLink = 'https://www.google.com/maps/dir/?api=1&destination=' +
-                            encodeURIComponent(item.address);
-
-                        marker.bindPopup(
-                            '<strong>' + (item.food_item || 'Food Donation') + '</strong>' +
-                            '<div class="popup-address">' + item.address + '</div>' +
-                            distText +
-                            '<div style="margin-top:8px;display:flex;gap:6px;">' +
-                            '<a href="donation.php?id=' + item.id + '" class="popup-link"><i class="fa-solid fa-eye"></i> View</a>' +
-                            '<a href="' + googleMapsLink + '" target="_blank" class="popup-link" style="background:rgba(59,130,246,0.08);color:#3b82f6;"><i class="fa-solid fa-map-pin"></i> Navigate</a>' +
-                            '</div>'
-                        );
+            try {
+                _markerClusterGroup = L.markerClusterGroup({
+                    chunkedLoading:true, maxClusterRadius:50, spiderfyOnMaxZoom:true,
+                    showCoverageOnHover:false, zoomToBoundsOnClick:true,
+                    iconCreateFunction:function(cl){
+                        var c=cl.getChildCount(),s=c<10?'small':(c<50?'medium':'large'),p=c<10?36:(c<50?44:52);
+                        return L.divIcon({html:'<div class="map-cluster-icon map-cluster-icon-'+s+'" style="width:'+p+'px;height:'+p+'px;">'+c+'</div>',className:'map-cluster',iconSize:L.point(p,p)});
                     }
                 });
+                _mapInstance.addLayer(_markerClusterGroup);
+            } catch(e) { _markerClusterGroup = null; }
 
-                if (bounds.length > 0) {
-                    _mapInstance.fitBounds(bounds, { padding: [40, 40] });
-                }
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(function(pos){
+                    _mapUserLat=pos.coords.latitude;_mapUserLng=pos.coords.longitude;
+                    if(_mapInstance){
+                        var u=L.divIcon({className:'',html:'<div class="user-location-pulse"></div>',iconSize:[14,14],iconAnchor:[7,7]});
+                        L.marker([_mapUserLat,_mapUserLng],{icon:u}).addTo(_mapInstance).bindPopup('<strong>You are here</strong>');
+                    }
+                },function(){},{timeout:8000,enableHighAccuracy:true});
+            }
+
+            _markerMap = {}; var bounds = [];
+            var withCoords = [], withoutCoords = [];
+
+            donations.forEach(function(d){
+                if(!d||typeof d!=='object')return;
+                var lat=d.latitude?parseFloat(d.latitude):null,lng=d.longitude?parseFloat(d.longitude):null;
+                if(lat&&lng&&!isNaN(lat)&&!isNaN(lng)&&lat>=26&&lat<=31)withCoords.push({id:d.id,address:d.address||d.pickup_address,food_item:d.food_item,d:d,lat:lat,lng:lng});
+                else withoutCoords.push({id:d.id,address:d.address||d.pickup_address,food_item:d.food_item,d:d});
             });
 
-            // Fix map rendering after load
-            setTimeout(function() { _mapInstance.invalidateSize(); }, 500);
-        }
+            withCoords.forEach(function(item){addMarker(item.lat,item.lng,item);bounds.push([item.lat,item.lng]);});
+
+            function addMarker(lat,lng,item){
+                if(!lat||!lng||!_mapInstance)return;
+                var icon=L.divIcon({className:'custom-marker',
+                    html:'<div class="donor-marker-icon"><i class="fa-solid fa-utensils"></i></div>',
+                    iconSize:[36,36],iconAnchor:[18,18],popupAnchor:[0,-22]});
+                var marker=L.marker([lat,lng],{icon:icon});
+                if(_markerClusterGroup)_markerClusterGroup.addLayer(marker);else marker.addTo(_mapInstance);
+                _markerMap[item.id]={marker:marker,lat:lat,lng:lng,donation:item.d};
+                var city=extractCity(item.address),dist='';
+                if(_mapUserLat&&_mapUserLng){var d=hDist(_mapUserLat,_mapUserLng,lat,lng);dist='<div class="popup-distance">📍 '+d.toFixed(1)+' km away</div>';}
+                var gm='https://www.google.com/maps/dir/?api=1&destination='+encodeURIComponent(item.address);
+                marker.bindPopup('<strong>'+item.food_item+'</strong><div class="popup-address">'+item.address+'</div>'+(city?'<div style="color:#059669;">🏙️ '+city+'</div>':'')+dist+
+                    '<div style="margin-top:8px;display:flex;gap:6px;"><a href="donation.php?id='+item.id+'" class="popup-link">View</a><a href="'+gm+'" target="_blank" class="popup-link" style="background:rgba(59,130,246,0.08);color:#3b82f6;">Directions</a></div>');
+            }
+
+            function processQueue(idx){
+                if(idx>=withoutCoords.length){
+                    if(bounds.length>0&&_mapInstance)try{_mapInstance.fitBounds(L.latLngBounds(bounds),{padding:[40,40],maxZoom:12});}catch(e){}
+                    setTimeout(function(){if(_mapInstance)_mapInstance.invalidateSize();},300);
+                    return;
+                }
+                var item=withoutCoords[idx];
+                if(!item.address){processQueue(idx+1);return;}
+                localGeocode(item.address).then(function(coords){
+                    if(coords){addMarker(coords.lat,coords.lng,item);bounds.push([coords.lat,coords.lng]);}
+                    else{_markerMap[item.id]={marker:null,lat:null,lng:null,donation:item.d};}
+                    setTimeout(function(){processQueue(idx+1);},200);
+                });
+            }
+            processQueue(0);
+        });
     };
 
-    /**
-     * Initialize a map for a single donation (detail page)
-     */
-    window.initSingleDonationMap = function(elementId, address, foodItem, donationId) {
+    window.initSingleDonationMap = function(elementId, address, foodItem, donationId, lat, lng) {
         var container = document.getElementById(elementId);
         if (!container || !address) return;
-
         container.innerHTML = '<div class="map-loading"><i class="fa-solid fa-spinner fa-spin"></i> Loading map...</div>';
 
-        if (typeof L === 'undefined') {
-            var link = document.createElement('link');
-            link.rel = 'stylesheet';
-            link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
-            document.head.appendChild(link);
+        function loadLeaflet(cb){if(typeof L!=='undefined'){cb();return;}
+            var l=document.createElement('link');l.rel='stylesheet';l.href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';document.head.appendChild(l);
+            var s=document.createElement('script');s.src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';s.onload=cb;document.head.appendChild(s);}
 
-            var script = document.createElement('script');
-            script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-            script.onload = function() { buildSingleMap(); };
-            document.head.appendChild(script);
-        } else {
-            buildSingleMap();
-        }
+        loadLeaflet(function(){
+            if(lat&&lng&&!isNaN(lat)&&!isNaN(lng)){renderMap(parseFloat(lat),parseFloat(lng));return;}
+            localGeocode(address).then(function(c){if(c)renderMap(c.lat,c.lng);else renderMap(null,null);});
+        });
 
-        function buildSingleMap() {
-            geocodeAddress(address).then(function(coords) {
-                container.innerHTML = '';
-
-                var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-                var map = L.map(container);
-
-                var tileUrl = isDark
-                    ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
-                    : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-                var tileAttribution = isDark
-                    ? '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>'
-                    : '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
-
-                L.tileLayer(tileUrl, {
-                    attribution: tileAttribution,
-                    maxZoom: 18
-                }).addTo(map);
-
-                if (coords) {
-                    map.setView([coords.lat, coords.lng], 15);
-
-                    var leafletIcon = L.divIcon({
-                        className: 'custom-marker',
-                        html: '<div style="background:#059669;color:#fff;width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.3);font-size:16px;"><i class="fa-solid fa-utensils"></i></div>',
-                        iconSize: [36, 36],
-                        iconAnchor: [18, 18],
-                        popupAnchor: [0, -22]
-                    });
-
-                    var googleMapsLink = 'https://www.google.com/maps/dir/?api=1&destination=' +
-                        encodeURIComponent(address);
-
-                    L.marker([coords.lat, coords.lng], { icon: leafletIcon }).addTo(map)
-                        .bindPopup(
-                            '<strong>' + (foodItem || 'Pickup Location') + '</strong>' +
-                            '<div class="popup-address">' + address + '</div>' +
-                            '<a href="' + googleMapsLink + '" target="_blank" class="popup-link"><i class="fa-solid fa-map-pin"></i> Open in Google Maps</a>'
-                        )
-                        .openPopup();
-                } else {
-                    map.setView([27.7172, 85.3240], 12);
-                    if (container.querySelector('.map-geocode-error') === null) {
-                        container.insertAdjacentHTML('beforeend',
-                            '<div class="map-geocode-error" style="position:absolute;bottom:20px;left:50%;transform:translateX(-50%);background:var(--surface,#fff);padding:10px 18px;border-radius:8px;box-shadow:0 2px 12px rgba(0,0,0,0.15);font-size:13px;color:var(--text-muted,#94a3b8);z-index:1000;">' +
-                            '<i class="fa-solid fa-triangle-exclamation"></i> Could not locate this address on the map. ' +
-                            '<a href="https://www.google.com/maps/search/' + encodeURIComponent(address) + '" target="_blank" style="color:#3b82f6;font-weight:600;text-decoration:none;">Search on Google Maps</a>' +
-                            '</div>'
-                        );
-                    }
-                }
-
-                setTimeout(function() { map.invalidateSize(); }, 300);
-            });
+        function renderMap(lat,lng){
+            container.innerHTML='';
+            var isDark=document.documentElement.getAttribute('data-theme')==='dark';
+            var map=L.map(container,{maxBounds:L.latLngBounds(NEPAL_BOUNDS_RAW),maxBoundsViscosity:1.0});
+            L.tileLayer(isDark?'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png':'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+                attribution:isDark?'&copy; OSM &copy; CARTO':'&copy; OpenStreetMap contributors',maxZoom:18
+            }).addTo(map);
+            if(lat&&lng){
+                map.setView([lat,lng],15);
+                var gm='https://www.google.com/maps/dir/?api=1&destination='+encodeURIComponent(address);
+                var icon=L.divIcon({className:'custom-marker',html:'<div class="donor-marker-icon" style="width:40px;height:40px;font-size:18px;"><i class="fa-solid fa-utensils"></i></div>',iconSize:[40,40],iconAnchor:[20,20]});
+                L.marker([lat,lng],{icon:icon}).addTo(map).bindPopup('<strong>'+foodItem+'</strong><div class="popup-address">'+address+'</div><a href="'+gm+'" target="_blank" class="popup-link" style="background:#3b82f6;color:white;">Open in Google Maps</a>').openPopup();
+            } else {
+                map.setView([27.7172,85.3240],12);
+                if(!container.querySelector('.map-geocode-error')) container.insertAdjacentHTML('beforeend',
+                    '<div class="map-geocode-error" style="position:absolute;bottom:20px;left:50%;transform:translateX(-50%);background:var(--surface,#fff);padding:10px 18px;border-radius:8px;box-shadow:0 2px 12px rgba(0,0,0,0.15);font-size:13px;color:var(--text-muted);z-index:1000;">'+
+                    '<i class="fa-solid fa-triangle-exclamation"></i> Could not locate. <a href="https://www.google.com/maps/search/'+encodeURIComponent(address)+'" target="_blank" style="color:#3b82f6;font-weight:600;">Search on Google Maps</a></div>');
+            }
+            setTimeout(function(){map.invalidateSize();},300);
         }
     };
 })();
-
 // ============================================================
 // SEARCH & FILTER — Real-time donation filtering by name/location
 // ============================================================

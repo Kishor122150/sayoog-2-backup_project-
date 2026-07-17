@@ -61,12 +61,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
-    // Register User
+    // Register User — Step 1: Send OTP email first
     if (empty($errors)) {
         try {
-            $password_hash = password_hash($password, PASSWORD_BCRYPT);
-            
-            // Handle profile photo upload
+            // Handle profile photo upload (store temporarily as base64 in session - small files only)
             $profile_photo = null;
             if (!empty($_FILES['profile_photo']['name'])) {
                 $photoFile = $_FILES['profile_photo'];
@@ -84,21 +82,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                 }
             }
-            
-            $stmt = $pdo->prepare("INSERT INTO users (name, email, address, phone, password, role, profile_photo) VALUES (?, ?, ?, ?, ?, ?, ?)");
-            $stmt->execute([$name, $email, $address, $phone, $password_hash, 'user', $profile_photo]);
-            
-            // Send welcome email notification
-            $new_user_id = $pdo->lastInsertId();
-            create_notification($pdo, $new_user_id, 'registration',
-                'Welcome to Sayog, ' . $name . '! Your account has been created successfully. You can now browse and donate food in your community.',
-                'login.php', true);
-            
-            // Set success flash message and redirect
-            set_flash_message('success', 'Registration successful! You can now log in.');
-            redirect('login.php');
+
+            // Generate and send OTP
+            $otp = generate_otp();
+            store_otp($pdo, $email, $otp);
+            $emailSent = send_otp_email($pdo, $email, $otp, $name);
+
+            // Store registration data in session for the next step (hash password first)
+            $_SESSION['reg_data'] = [
+                'name' => $name,
+                'email' => $email,
+                'address' => $address,
+                'phone' => $phone,
+                'password_hash' => password_hash($password, PASSWORD_BCRYPT),
+                'profile_photo' => $profile_photo
+            ];
+
+            if ($emailSent) {
+                set_flash_message('success', 'A 6-digit OTP has been sent to ' . htmlspecialchars($email) . '. Please check your inbox and enter the code to complete registration.');
+            } else {
+                set_flash_message('info', 'Unable to send email automatically. Please use the resend option on the verification page to try again.');
+            }
+            redirect('verify-otp.php');
         } catch (PDOException $e) {
-            $errors[] = "Failed to register user: " . $e->getMessage();
+            $errors[] = "Failed to process registration: " . $e->getMessage();
         }
     }
 }

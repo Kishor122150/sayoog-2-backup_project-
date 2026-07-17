@@ -6,7 +6,8 @@ require_once '../config.php';
 // }
 
 $section = sanitize($_GET['section'] ?? 'dashboard');
-$valid_sections = ['dashboard', 'users', 'products', 'cms', 'listing_requests', 'contact_messages', 'donations'];
+$valid_sections = ['dashboard', 'users', 'products', 'cms', 'listing_requests', 'contact_messages',
+    'smtp', 'donations', 'volunteers', 'volunteer_deliveries', 'team', 'chatbot'];
 if (!in_array($section, $valid_sections)) {
     $section = 'dashboard';
 }
@@ -162,6 +163,131 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         redirect('admin.php?section=contact_messages');
     }
+    // ── VOLUNTEER ACTIONS ──
+    if ($action === 'approve_volunteer') {
+        $vid = intval($_POST['volunteer_id'] ?? 0);
+        if ($vid > 0) {
+            approve_volunteer($pdo, $vid, $_SESSION['user_id'] ?? 0);
+            set_flash_message('success', 'Volunteer approved successfully.');
+            redirect('admin.php?section=volunteers&vol_tab=approved');
+        }
+    }
+    if ($action === 'reject_volunteer') {
+        $vid = intval($_POST['volunteer_id'] ?? 0);
+        $reason = sanitize($_POST['reject_reason'] ?? 'Other');
+        if ($vid > 0) {
+            reject_volunteer($pdo, $vid, $reason);
+            set_flash_message('warning', 'Volunteer rejected.');
+            redirect('admin.php?section=volunteers&vol_tab=rejected');
+        }
+    }
+    if ($action === 'suspend_volunteer') {
+        $vid = intval($_POST['volunteer_id'] ?? 0);
+        $reason = sanitize($_POST['suspend_reason'] ?? 'Policy Violation');
+        if ($vid > 0) {
+            suspend_volunteer($pdo, $vid, $reason);
+            set_flash_message('warning', 'Volunteer suspended.');
+            redirect('admin.php?section=volunteers&vol_tab=suspended');
+        }
+    }
+    if ($action === 'delete_volunteer') {
+        $vid = intval($_POST['volunteer_id'] ?? 0);
+        if ($vid > 0) {
+            $pdo->prepare("DELETE FROM volunteers WHERE id = ?")->execute([$vid]);
+            set_flash_message('success', 'Volunteer record deleted.');
+            redirect('admin.php?section=volunteers');
+        }
+    }
+
+    // ── TEAM MEMBER ACTIONS ──
+    if ($action === 'create_team_member' || $action === 'update_team_member') {
+        $name = sanitize($_POST['name'] ?? '');
+        $role = sanitize($_POST['role'] ?? '');
+        $bio = sanitize($_POST['bio'] ?? '');
+        $email = sanitize($_POST['email'] ?? '');
+        $linkedin = sanitize($_POST['linkedin'] ?? '');
+        $github = sanitize($_POST['github'] ?? '');
+        $website = sanitize($_POST['website'] ?? '');
+        $display_order = intval($_POST['display_order'] ?? 0);
+        $status = sanitize($_POST['status'] ?? 'active');
+        // Handle file upload for photo
+        $photo = null;
+        if (isset($_FILES['photo']) && $_FILES['photo']['error'] === UPLOAD_ERR_OK) {
+            $allowed = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+            // Use server-side MIME detection for security
+            $finfo = finfo_open(FILEINFO_MIME_TYPE);
+            $file_type = finfo_file($finfo, $_FILES['photo']['tmp_name']);
+            finfo_close($finfo);
+            if (in_array($file_type, $allowed)) {
+                $max_size = 5 * 1024 * 1024; // 5MB
+                if ($_FILES['photo']['size'] <= $max_size) {
+                    $teamDir = __DIR__ . '/../uploads/team';
+                    if (!is_dir($teamDir)) mkdir($teamDir, 0755, true);
+                    $ext = pathinfo($_FILES['photo']['name'], PATHINFO_EXTENSION);
+                    $filename = 'team_' . uniqid() . '_' . time() . '.' . $ext;
+                    $dest = $teamDir . '/' . $filename;
+                    if (move_uploaded_file($_FILES['photo']['tmp_name'], $dest)) {
+                        $photo = 'uploads/team/' . $filename;
+                    }
+                } else {
+                    $errors[] = 'Photo file size must be less than 5MB.';
+                }
+            } else {
+                $errors[] = 'Photo must be a JPEG, PNG, GIF, or WebP image.';
+            }
+        }
+
+        if (empty($name)) $errors[] = 'Name is required.';
+        if (empty($role)) $errors[] = 'Role is required.';
+
+        if (empty($errors)) {
+            if ($action === 'create_team_member') {
+                $stmt = $pdo->prepare("INSERT INTO team_members (name, role, bio, photo, email, linkedin, github, website, display_order, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+                $stmt->execute([$name, $role, $bio, $photo ?: null, $email ?: null, $linkedin ?: null, $github ?: null, $website ?: null, $display_order, $status]);
+                set_flash_message('success', 'Team member added successfully.');
+                redirect('admin.php?section=team');
+            } else {
+                $member_id = intval($_POST['member_id'] ?? 0);
+                // Keep existing photo if no new file uploaded
+                if (!$photo && $member_id > 0) {
+                    $stmt = $pdo->prepare("SELECT photo FROM team_members WHERE id = ?");
+                    $stmt->execute([$member_id]);
+                    $photo = $stmt->fetchColumn();
+                } else {
+                    // Delete old photo file when replacing
+                    $stmt = $pdo->prepare("SELECT photo FROM team_members WHERE id = ?");
+                    $stmt->execute([$member_id]);
+                    $oldPhoto = $stmt->fetchColumn();
+                    if ($oldPhoto) {
+                        $oldPath = __DIR__ . '/../' . $oldPhoto;
+                        if (file_exists($oldPath)) @unlink($oldPath);
+                    }
+                }
+                $stmt = $pdo->prepare("UPDATE team_members SET name = ?, role = ?, bio = ?, photo = ?, email = ?, linkedin = ?, github = ?, website = ?, display_order = ?, status = ? WHERE id = ?");
+                $stmt->execute([$name, $role, $bio, $photo ?: null, $email ?: null, $linkedin ?: null, $github ?: null, $website ?: null, $display_order, $status, $member_id]);
+                set_flash_message('success', 'Team member updated successfully.');
+                redirect('admin.php?section=team');
+            }
+        }
+    }
+
+    if ($action === 'delete_team_member') {
+        $member_id = intval($_POST['member_id'] ?? 0);
+        if ($member_id > 0) {
+            // Delete photo file before removing record
+            $stmt = $pdo->prepare("SELECT photo FROM team_members WHERE id = ?");
+            $stmt->execute([$member_id]);
+            $oldPhoto = $stmt->fetchColumn();
+            if ($oldPhoto) {
+                $oldPath = __DIR__ . '/../' . $oldPhoto;
+                if (file_exists($oldPath)) @unlink($oldPath);
+            }
+            $stmt = $pdo->prepare("DELETE FROM team_members WHERE id = ?");
+            $stmt->execute([$member_id]);
+            set_flash_message('success', 'Team member deleted.');
+        }
+        redirect('admin.php?section=team');
+    }
 }
 
 $user_count = $pdo->query("SELECT COUNT(*) FROM users")->fetchColumn();
@@ -174,6 +300,13 @@ $pages = $pdo->query("SELECT * FROM cms_pages ORDER BY created_at DESC")->fetchA
 $pending_donations = $pdo->query("SELECT d.*, u.name AS donor_name, u.email AS donor_email, u.address AS donor_address, u.phone AS donor_phone FROM donations d JOIN users u ON d.donor_id = u.id WHERE d.verification_status = 'pending' ORDER BY d.created_at DESC")->fetchAll();
 $all_donations = $pdo->query("SELECT d.*, u.name AS donor_name, u.email AS donor_email, u.address AS donor_address, u.phone AS donor_phone FROM donations d JOIN users u ON d.donor_id = u.id ORDER BY d.created_at DESC")->fetchAll();
 $recent_donations = $pdo->query("SELECT d.*, u.name AS donor_name FROM donations d JOIN users u ON d.donor_id = u.id ORDER BY d.created_at DESC LIMIT 6")->fetchAll();
+$volunteer_counts = get_volunteer_counts($pdo);
+$volunteers_pending = get_volunteers_by_status($pdo, 'pending');
+$volunteers_approved = get_volunteers_by_status($pdo, 'approved');
+$volunteers_rejected = get_volunteers_by_status($pdo, 'rejected');
+$volunteers_suspended = get_volunteers_by_status($pdo, 'suspended');
+$team_members = $pdo->query("SELECT * FROM team_members WHERE status = 'active' ORDER BY display_order ASC, created_at DESC")->fetchAll();
+$all_team_members = $pdo->query("SELECT * FROM team_members ORDER BY display_order ASC, created_at DESC")->fetchAll();
 ?>
 
 <?php
@@ -458,6 +591,22 @@ $cms_tab = sanitize($_GET['cms_tab'] ?? 'homepage');
 
             <div class="nav-section-label">Management</div>
 
+            <a href="admin.php?section=volunteers" class="<?php echo $section === 'volunteers' ? 'active' : ''; ?>">
+                <i class="fa-solid fa-hand-holding-heart"></i> Volunteers
+                <?php if (isset($volunteer_counts['pending']) && $volunteer_counts['pending'] > 0): ?>
+                    <span class="nav-badge"><?php echo (int)$volunteer_counts['pending']; ?></span>
+                <?php endif; ?>
+            </a>
+
+            <a href="admin.php?section=volunteer_deliveries" class="<?php echo $section === 'volunteer_deliveries' ? 'active' : ''; ?>">
+                <i class="fa-solid fa-truck-fast"></i> Volunteer Deliveries
+            </a>
+
+
+            <a href="admin.php?section=team" class="<?php echo $section === 'team' ? 'active' : ''; ?>">
+                <i class="fa-solid fa-people-group"></i> Team
+            </a>
+
             <a href="admin.php?section=users" class="<?php echo $section === 'users' ? 'active' : ''; ?>">
                 <i class="fa-solid fa-users"></i> Users
             </a>
@@ -468,6 +617,16 @@ $cms_tab = sanitize($_GET['cms_tab'] ?? 'homepage');
 
             <a href="admin.php?section=cms" class="<?php echo $section === 'cms' ? 'active' : ''; ?>">
                 <i class="fa-solid fa-file-lines"></i> CMS Editor
+            </a>
+
+            <a href="admin.php?section=smtp" class="<?php echo $section === 'smtp' ? 'active' : ''; ?>">
+                <i class="fa-solid fa-gear"></i> SMTP Config
+            </a>
+
+            <div class="nav-section-label">Chatbot</div>
+
+            <a href="admin.php?section=chatbot" class="<?php echo $section === 'chatbot' ? 'active' : ''; ?>">
+                <i class="fa-solid fa-robot"></i> AI Chatbot
             </a>
 
             <div class="nav-section-label">Other</div>
@@ -504,6 +663,10 @@ $cms_tab = sanitize($_GET['cms_tab'] ?? 'homepage');
                         'cms' => 'CMS Editor',
                         'contact_messages' => 'Contact Messages',
                         'donations' => 'Donation Review',
+                        'volunteers' => 'Volunteer Management',
+                        'smtp' => 'SMTP Configuration',
+                        'chatbot' => 'AI Chatbot',
+                        'volunteer_deliveries' => 'Volunteer Deliveries',
                     ];
                     echo $page_titles[$section] ?? 'Dashboard';
                     ?>
@@ -945,6 +1108,762 @@ $cms_tab = sanitize($_GET['cms_tab'] ?? 'homepage');
                         </div>
                     </div>
                 </div>
+
+            <!-- ============================== -->
+
+            <!-- ============================== -->
+            <!-- VOLUNTEER MANAGEMENT SECTION   -->
+            <!-- ============================== -->
+            <?php elseif ($section === 'volunteers'):
+                $vol_tab = sanitize($_GET['vol_tab'] ?? 'pending');
+                $valid_vol_tabs = ['pending', 'approved', 'rejected', 'suspended', 'detail'];
+                if (!in_array($vol_tab, $valid_vol_tabs)) $vol_tab = 'pending';
+                $vol_detail_id = intval($_GET['detail_id'] ?? 0);
+
+                $vol_list = [];
+                $list_title = '';
+                if ($vol_tab === 'pending') { $vol_list = $volunteers_pending; $list_title = 'Pending Applications'; }
+                elseif ($vol_tab === 'approved') { $vol_list = $volunteers_approved; $list_title = 'Approved Volunteers'; }
+                elseif ($vol_tab === 'rejected') { $vol_list = $volunteers_rejected; $list_title = 'Rejected Applications'; }
+                elseif ($vol_tab === 'suspended') { $vol_list = $volunteers_suspended; $list_title = 'Suspended Volunteers'; }
+            ?>
+
+                <?php if ($vol_tab !== 'detail'): ?>
+                <div class="section-header">
+                    <div>
+                        <h1><i class="fa-solid fa-hand-holding-heart"></i> Volunteer Management</h1>
+                        <p>Review, verify, and manage volunteer applications</p>
+                    </div>
+                </div>
+
+                <!-- Stats Row -->
+                <div class="stats-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:24px;">
+                    <div class="stat-card">
+                        <div class="stat-card-icon green"><i class="fa-solid fa-clock"></i></div>
+                        <div class="stat-card-body">
+                            <div class="stat-card-value"><?php echo (int)$volunteer_counts['pending']; ?></div>
+                            <div class="stat-card-label">Pending</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-card-icon blue"><i class="fa-solid fa-circle-check"></i></div>
+                        <div class="stat-card-body">
+                            <div class="stat-card-value"><?php echo (int)$volunteer_counts['approved']; ?></div>
+                            <div class="stat-card-label">Approved</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-card-icon amber"><i class="fa-solid fa-ban"></i></div>
+                        <div class="stat-card-body">
+                            <div class="stat-card-value"><?php echo (int)$volunteer_counts['rejected']; ?></div>
+                            <div class="stat-card-label">Rejected</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-card-icon purple"><i class="fa-solid fa-pause"></i></div>
+                        <div class="stat-card-body">
+                            <div class="stat-card-value"><?php echo (int)$volunteer_counts['suspended']; ?></div>
+                            <div class="stat-card-label">Suspended</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tabs -->
+                <div class="cms-tabs" style="margin-bottom:24px;">
+                    <a href="admin.php?section=volunteers&vol_tab=pending" class="cms-tab <?php echo $vol_tab === 'pending' ? 'active' : ''; ?>">
+                        <i class="fa-solid fa-clock"></i> Pending <span class="badge badge-warning" style="margin-left:6px;"><?php echo (int)$volunteer_counts['pending']; ?></span>
+                    </a>
+                    <a href="admin.php?section=volunteers&vol_tab=approved" class="cms-tab <?php echo $vol_tab === 'approved' ? 'active' : ''; ?>">
+                        <i class="fa-solid fa-circle-check"></i> Approved <span class="badge badge-success" style="margin-left:6px;"><?php echo (int)$volunteer_counts['approved']; ?></span>
+                    </a>
+                    <a href="admin.php?section=volunteers&vol_tab=rejected" class="cms-tab <?php echo $vol_tab === 'rejected' ? 'active' : ''; ?>">
+                        <i class="fa-solid fa-ban"></i> Rejected <span class="badge badge-danger" style="margin-left:6px;"><?php echo (int)$volunteer_counts['rejected']; ?></span>
+                    </a>
+                    <a href="admin.php?section=volunteers&vol_tab=suspended" class="cms-tab <?php echo $vol_tab === 'suspended' ? 'active' : ''; ?>">
+                        <i class="fa-solid fa-pause"></i> Suspended <span class="badge badge-warning" style="margin-left:6px;"><?php echo (int)$volunteer_counts['suspended']; ?></span>
+                    </a>
+                </div>
+
+                <!-- Table -->
+                <div class="admin-card">
+                    <div class="admin-card-header">
+                        <h3><i class="fa-solid fa-list"></i> <?php echo $list_title; ?></h3>
+                        <span class="badge badge-info"><?php echo count($vol_list); ?> records</span>
+                    </div>
+                    <div class="admin-card-body" style="padding:0;">
+                        <?php if (empty($vol_list)): ?>
+                            <div class="empty-state" style="padding:40px 20px;">
+                                <i class="fa-solid fa-inbox"></i>
+                                <h3>No <?php echo strtolower($list_title); ?></h3>
+                                <p>There are no volunteer applications in this category.</p>
+                            </div>
+                        <?php else: ?>
+                        <div class="table-wrapper">
+                            <table class="modern-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width:50px;">#</th>
+                                        <th>Volunteer</th>
+                                        <th>Contact</th>
+                                        <th>Vehicle</th>
+                                        <th>Documents</th>
+                                        <th>Applied</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <?php $sn = 1; foreach ($vol_list as $v): ?>
+                                    <tr>
+                                        <td data-label="#"><span class="badge badge-neutral"><?php echo $sn++; ?></span></td>
+                                        <td data-label="Volunteer">
+                                            <div class="user-cell">
+                                                <div class="user-avatar"><?php echo strtoupper(substr($v['full_name'],0,1)); ?></div>
+                                                <div>
+                                                    <div class="user-name"><?php echo htmlspecialchars($v['full_name']); ?></div>
+                                                    <div class="user-email"><?php echo htmlspecialchars($v['email']); ?></div>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td data-label="Contact" style="font-size:13px;">
+                                            <?php echo htmlspecialchars($v['phone']); ?>
+                                        </td>
+                                        <td data-label="Vehicle">
+                                            <span class="badge badge-info"><?php echo ucfirst($v['vehicle_type']); ?></span>
+                                            <div style="font-size:11px;color:var(--admin-text-muted);margin-top:2px;"><?php echo $v['delivery_radius']; ?>km</div>
+                                        </td>
+                                        <td data-label="Documents">
+                                            <div style="display:flex;gap:3px;">
+                                                <?php $hasDoc = false; ?>
+                                                <?php foreach (['citizenship_front','citizenship_back','national_id','college_id','driving_license'] as $dk): ?>
+                                                    <?php if (!empty($v[$dk])): $hasDoc = true; ?>
+                                                        <a href="../<?php echo htmlspecialchars($v[$dk]); ?>" target="_blank" title="<?php echo $dk; ?>" style="padding:2px 6px;background:var(--admin-bg-light);border-radius:4px;font-size:10px;color:var(--admin-text);text-decoration:none;"><i class="fa-solid fa-file"></i></a>
+                                                    <?php endif; ?>
+                                                <?php endforeach; ?>
+                                                <?php if (!$hasDoc): ?><span style="font-size:11px;color:var(--admin-text-muted);">None</span><?php endif; ?>
+                                            </div>
+                                        </td>
+                                        <td data-label="Applied" style="white-space:nowrap;font-size:13px;"><?php echo date('d M Y',strtotime($v['created_at'])); ?></td>
+                                        <td data-label="Actions">
+                                            <div class="table-actions">
+                                                <a href="admin.php?section=volunteers&vol_tab=detail&detail_id=<?php echo $v['id']; ?>" class="btn btn-sm btn-outline" title="View Details"><i class="fa-solid fa-eye"></i></a>
+                                                <?php if ($v['status'] === 'pending'): ?>
+                                                    <form method="POST" style="display:inline;">
+                                                        <input type="hidden" name="action" value="approve_volunteer">
+                                                        <input type="hidden" name="volunteer_id" value="<?php echo $v['id']; ?>">
+                                                        <button type="submit" class="btn btn-sm btn-success" title="Approve"><i class="fa-solid fa-check"></i></button>
+                                                    </form>
+                                                    <form method="POST" style="display:inline;" onsubmit="return confirm('Reject?');">
+                                                        <input type="hidden" name="action" value="reject_volunteer">
+                                                        <input type="hidden" name="volunteer_id" value="<?php echo $v['id']; ?>">
+                                                        <input type="hidden" name="reject_reason" value="Other">
+                                                        <button type="submit" class="btn btn-sm btn-secondary" title="Reject"><i class="fa-solid fa-xmark"></i></button>
+                                                    </form>
+                                                <?php elseif ($v['status'] === 'approved'): ?>
+                                                    <form method="POST" style="display:inline;" onsubmit="return confirm('Suspend?');">
+                                                        <input type="hidden" name="action" value="suspend_volunteer">
+                                                        <input type="hidden" name="volunteer_id" value="<?php echo $v['id']; ?>">
+                                                        <input type="hidden" name="suspend_reason" value="Policy Violation">
+                                                        <button type="submit" class="btn btn-sm btn-warning" title="Suspend"><i class="fa-solid fa-pause"></i></button>
+                                                    </form>
+                                                <?php endif; ?>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                        <?php endif; ?>
+                    </div>
+                </div>
+
+            <!-- ============================== -->
+            <!-- CMS SECTION                   -->
+            <!-- ============================== -->
+
+                <?php endif; ?>
+            <?php if ($vol_tab === 'detail' && $vol_detail_id > 0):
+                $vol = get_volunteer_by_id($pdo, $vol_detail_id);
+                if (!$vol): ?>
+                    <div class="empty-state"><i class="fa-solid fa-circle-exclamation"></i><h3>Volunteer not found</h3></div>
+                <?php else: ?>
+                <div class="section-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+                    <div>
+                        <h1 style="display:flex;align-items:center;gap:12px;">
+                            <a href="admin.php?section=volunteers" class="btn btn-sm btn-outline"><i class="fa-solid fa-arrow-left"></i></a>
+                            <?php echo htmlspecialchars($vol['full_name']); ?>
+                        </h1>
+                        <p>Volunteer application details &amp; verification</p>
+                    </div>
+                    <span class="badge badge-<?php echo $vol['status']==='approved'?'success':($vol['status']==='rejected'||$vol['status']==='suspended'?'danger':'warning'); ?>" style="font-size:14px;padding:8px 20px;"><?php echo strtoupper($vol['status']); ?></span>
+                </div>
+
+                <div class="admin-card" style="margin-bottom:20px;">
+                    <div class="admin-card-header"><h3><i class="fa-solid fa-user"></i> Personal Information</h3></div>
+                    <div class="admin-card-body">
+                        <table class="modern-table" style="border:none;">
+                            <tr><td style="width:160px;font-weight:600;">Full Name</td><td><?php echo htmlspecialchars($vol['full_name']); ?></td></tr>
+                            <tr><td style="font-weight:600;">Email</td><td><?php echo htmlspecialchars($vol['email']); ?></td></tr>
+                            <tr><td style="font-weight:600;">Phone</td><td><?php echo htmlspecialchars($vol['phone']); ?></td></tr>
+                            <tr><td style="font-weight:600;">Date of Birth</td><td><?php echo htmlspecialchars($vol['date_of_birth'] ?? 'N/A'); ?></td></tr>
+                            <tr><td style="font-weight:600;">Gender</td><td><?php echo ucfirst($vol['gender'] ?? 'N/A'); ?></td></tr>
+                            <tr><td style="font-weight:600;">Emergency Contact</td><td><?php echo htmlspecialchars($vol['emergency_contact'] ?? 'N/A'); ?></td></tr>
+                            <tr><td style="font-weight:600;">Address</td><td><?php echo htmlspecialchars($vol['address'] ?? 'N/A'); ?>, Wd-<?php echo htmlspecialchars($vol['ward_number'] ?? ''); ?>, <?php echo htmlspecialchars($vol['municipality'] ?? ''); ?>, <?php echo htmlspecialchars($vol['district'] ?? ''); ?></td></tr>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="admin-card" style="margin-bottom:20px;">
+                    <div class="admin-card-header"><h3><i class="fa-solid fa-truck"></i> Vehicle &amp; Availability</h3></div>
+                    <div class="admin-card-body">
+                        <table class="modern-table" style="border:none;">
+                            <tr><td style="width:160px;font-weight:600;">Vehicle</td><td><span class="badge badge-info"><?php echo ucfirst($vol['vehicle_type']); ?></span> &middot; <?php echo $vol['delivery_radius']; ?>km</td></tr>
+                            <tr><td style="font-weight:600;">Availability</td><td><?php echo str_replace(',', ', ', ucfirst($vol['availability'])); ?></td></tr>
+                            <tr><td style="font-weight:600;">Languages</td><td><?php echo htmlspecialchars($vol['languages'] ?? 'N/A'); ?></td></tr>
+                            <tr><td style="font-weight:600;">Occupation</td><td><?php echo htmlspecialchars($vol['occupation'] ?? 'N/A'); ?></td></tr>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="admin-card" style="margin-bottom:20px;">
+                    <div class="admin-card-header"><h3><i class="fa-solid fa-file-shield"></i> Identity Documents</h3></div>
+                    <div class="admin-card-body">
+                        <table class="modern-table" style="border:none;">
+                            <?php $docF = ['citizenship_front'=>'Citizenship Front','citizenship_back'=>'Citizenship Back','national_id'=>'National ID','college_id'=>'College ID','driving_license'=>'Driving License']; ?>
+                            <?php foreach ($docF as $dk => $dl): ?>
+                                <tr><td style="width:160px;font-weight:600;"><?php echo $dl; ?></td>
+                                    <td><?php if (!empty($vol[$dk])): ?>
+                                        <a href="../<?php echo htmlspecialchars($vol[$dk]); ?>" target="_blank" class="btn btn-sm btn-outline"><i class="fa-solid fa-eye"></i> View</a>
+                                        <a href="../<?php echo htmlspecialchars($vol[$dk]); ?>" download class="btn btn-sm btn-outline"><i class="fa-solid fa-download"></i> Download</a>
+                                    <?php else: ?><span style="color:#94a3b8;">Not uploaded</span><?php endif; ?></td></tr>
+                            <?php endforeach; ?>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="admin-card" style="margin-bottom:20px;">
+                    <div class="admin-card-header"><h3><i class="fa-solid fa-clock"></i> Application Info</h3></div>
+                    <div class="admin-card-body">
+                        <table class="modern-table" style="border:none;">
+                            <tr><td style="width:160px;font-weight:600;">Applied</td><td><?php echo date('d M Y h:i A', strtotime($vol['created_at'])); ?></td></tr>
+                            <tr><td style="font-weight:600;">Volunteer ID</td><td><?php echo htmlspecialchars($vol['volunteer_id'] ?? '-'); ?></td></tr>
+                            <?php if (!empty($vol['rejected_reason'])): ?>
+                                <tr><td style="font-weight:600;color:#dc2626;">Rejection</td><td style="color:#dc2626;"><?php echo htmlspecialchars($vol['rejected_reason']); ?></td></tr>
+                            <?php endif; ?>
+                        </table>
+                    </div>
+                </div>
+
+                <div style="display:flex;gap:12px;flex-wrap:wrap;padding:20px;background:#fff;border-radius:14px;border:1px solid var(--admin-border);margin-bottom:24px;">
+                    <?php if ($vol['status'] === 'pending'): ?>
+                        <form method="POST" style="display:inline;">
+                            <input type="hidden" name="action" value="approve_volunteer">
+                            <input type="hidden" name="volunteer_id" value="<?php echo $vol['id']; ?>">
+                            <button type="submit" class="btn btn-success" style="padding:10px 24px;"><i class="fa-solid fa-check"></i> Approve Volunteer</button>
+                        </form>
+                        <form method="POST" style="display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;" onsubmit="return confirm('Reject this applicant?');">
+                            <input type="hidden" name="action" value="reject_volunteer">
+                            <input type="hidden" name="volunteer_id" value="<?php echo $vol['id']; ?>">
+                            <select name="reject_reason" style="padding:8px 12px;border:1px solid var(--admin-border);border-radius:8px;font-size:13px;min-width:160px;" required>
+                                <option value="">Select reason...</option>
+                                <option value="Incomplete Information">Incomplete Info</option>
+                                <option value="Invalid Documents">Invalid Documents</option>
+                                <option value="Duplicate Account">Duplicate</option>
+                                <option value="Fake Information">Fake Info</option>
+                                <option value="Other">Other</option>
+                            </select>
+                            <button type="submit" class="btn btn-secondary" style="padding:10px 24px;"><i class="fa-solid fa-xmark"></i> Reject</button>
+                        </form>
+                    <?php elseif ($vol['status'] === 'approved'): ?>
+                        <form method="POST" style="display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;" onsubmit="return confirm('Suspend this volunteer?');">
+                            <input type="hidden" name="action" value="suspend_volunteer">
+                            <input type="hidden" name="volunteer_id" value="<?php echo $vol['id']; ?>">
+                            <select name="suspend_reason" style="padding:8px 12px;border:1px solid var(--admin-border);border-radius:8px;font-size:13px;min-width:160px;" required>
+                                <option value="">Select reason...</option>
+                                <option value="Misconduct">Misconduct</option>
+                                <option value="Fake Delivery">Fake Delivery</option>
+                                <option value="Policy Violation">Policy Violation</option>
+                            </select>
+                            <button type="submit" class="btn btn-warning" style="padding:10px 24px;"><i class="fa-solid fa-pause"></i> Suspend</button>
+                        </form>
+                    <?php endif; ?>
+                    <form method="POST" style="display:inline;" onsubmit="return confirm('Permanently delete this record?');">
+                        <input type="hidden" name="action" value="delete_volunteer">
+                        <input type="hidden" name="volunteer_id" value="<?php echo $vol['id']; ?>">
+                        <button type="submit" class="btn btn-danger" style="padding:10px 24px;"><i class="fa-solid fa-trash"></i> Delete Record</button>
+                    </form>
+                </div>
+                <?php endif; ?>
+            <?php endif; ?>
+
+            <!-- ============================== -->
+            <!-- TEAM MANAGEMENT SECTION        -->
+            <!-- ============================== -->
+            <!-- ============================== -->
+            <!-- VOLUNTEER DELIVERIES SECTION   -->
+            <!-- ============================== -->
+            <?php elseif ($section === 'volunteer_deliveries'):
+                $del_status = sanitize($_GET['del_status'] ?? '');
+                $deliveries = get_all_volunteer_deliveries($pdo, $del_status, 100);
+                $vol_activity = get_volunteer_activity_stats($pdo);
+            ?>
+                <div class="section-header">
+                    <div>
+                        <h1><i class="fa-solid fa-truck-fast"></i> Volunteer Deliveries</h1>
+                        <p>Monitor all volunteer delivery requests, assignments, and activity tracking.</p>
+                    </div>
+                </div>
+
+                <!-- Stats Dashboard -->
+                <div class="stats-grid" style="grid-template-columns:repeat(5,1fr);margin-bottom:24px;">
+                    <div class="stat-card">
+                        <div class="stat-card-icon blue"><i class="fa-solid fa-truck"></i></div>
+                        <div class="stat-card-body">
+                            <div class="stat-card-value"><?php echo (int)$vol_activity['total']; ?></div>
+                            <div class="stat-card-label">Total Deliveries</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-card-icon amber"><i class="fa-solid fa-spinner"></i></div>
+                        <div class="stat-card-body">
+                            <div class="stat-card-value"><?php echo (int)$vol_activity['active']; ?></div>
+                            <div class="stat-card-label">Active Now</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-card-icon green"><i class="fa-solid fa-check-double"></i></div>
+                        <div class="stat-card-body">
+                            <div class="stat-card-value"><?php echo (int)$vol_activity['delivered']; ?></div>
+                            <div class="stat-card-label">Completed</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-card-icon purple"><i class="fa-solid fa-user-check"></i></div>
+                        <div class="stat-card-body">
+                            <div class="stat-card-value"><?php echo (int)$vol_activity['accepted']; ?></div>
+                            <div class="stat-card-label">Accepted by Volunteers</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-card-icon red"><i class="fa-solid fa-ban"></i></div>
+                        <div class="stat-card-body">
+                            <div class="stat-card-value"><?php echo (int)$vol_activity['cancelled']; ?></div>
+                            <div class="stat-card-label">Cancelled</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Filter Tabs -->
+                <div class="cms-tabs" style="margin-bottom:24px;">
+                    <a href="admin.php?section=volunteer_deliveries" class="cms-tab <?php echo empty($del_status) ? 'active' : ''; ?>"><i class="fa-solid fa-list"></i> All</a>
+                    <a href="admin.php?section=volunteer_deliveries&del_status=assigned" class="cms-tab <?php echo $del_status==='assigned'?'active':''; ?>"><i class="fa-solid fa-clock"></i> Assigned</a>
+                    <a href="admin.php?section=volunteer_deliveries&del_status=accepted" class="cms-tab <?php echo $del_status==='accepted'?'active':''; ?>"><i class="fa-solid fa-check-circle"></i> Accepted</a>
+                    <a href="admin.php?section=volunteer_deliveries&del_status=picked_up" class="cms-tab <?php echo $del_status==='picked_up'?'active':''; ?>"><i class="fa-solid fa-box-open"></i> Picked Up</a>
+                    <a href="admin.php?section=volunteer_deliveries&del_status=in_transit" class="cms-tab <?php echo $del_status==='in_transit'?'active':''; ?>"><i class="fa-solid fa-truck"></i> In Transit</a>
+                    <a href="admin.php?section=volunteer_deliveries&del_status=delivered" class="cms-tab <?php echo $del_status==='delivered'?'active':''; ?>"><i class="fa-solid fa-check-double"></i> Delivered</a>
+                </div>
+
+                <!-- Main Delivery Records Table -->
+                <div class="admin-card" style="margin-bottom:24px;">
+                    <div class="admin-card-header">
+                        <h3><i class="fa-solid fa-list"></i> Delivery Records — Who Accepted Whose Request?</h3>
+                        <span class="badge badge-info"><?php echo count($deliveries); ?> records</span>
+                    </div>
+                    <div class="admin-card-body" style="padding:0;">
+                        <?php if (empty($deliveries)): ?>
+                            <div class="empty-state" style="padding:40px 20px;">
+                                <i class="fa-solid fa-inbox"></i>
+                                <h3>No deliveries found</h3>
+                                <p>There are no volunteer delivery records matching this filter.</p>
+                            </div>
+                        <?php else: ?>
+                        <div class="table-wrapper">
+                            <table class="modern-table">
+                                <thead>
+                                    <tr>
+                                        <th>#</th>
+                                        <th>Food Item</th>
+                                        <th>Donor → Consumer</th>
+                                        <th>Volunteer</th>
+                                        <th>Vehicle</th>
+                                        <th>Status</th>
+                                        <th>Timeline</th>
+                                        <th>Created</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <?php $sn=1; foreach ($deliveries as $d):
+                                        $statusColors = ['assigned'=>'#f59e0b','accepted'=>'#3b82f6','picked_up'=>'#8b5cf6','in_transit'=>'#06b6d4','delivered'=>'#059669','cancelled'=>'#ef4444'];
+                                        $statusIcons = ['assigned'=>'fa-clock','accepted'=>'fa-check-circle','picked_up'=>'fa-box-open','in_transit'=>'fa-truck','delivered'=>'fa-check-double','cancelled'=>'fa-ban'];
+                                        $color = $statusColors[$d['status']] ?? '#6b7280';
+                                        $icon = $statusIcons[$d['status']] ?? 'fa-circle';
+                                        // Build timeline status indicators
+                                        $timeline_steps = ['assigned','accepted','picked_up','in_transit','delivered'];
+                                        $current_idx = array_search($d['status'], $timeline_steps);
+                                    ?>
+                                    <tr>
+                                        <td><span class="badge badge-neutral"><?php echo $sn++; ?></span></td>
+                                        <td><strong><?php echo htmlspecialchars($d['food_item']); ?></strong></td>
+                                        <td>
+                                            <div style="display:flex;flex-direction:column;gap:2px;font-size:13px;">
+                                                <span><i class="fa-solid fa-user" style="color:#059669;width:16px;"></i> <?php echo htmlspecialchars($d['donor_name'] ?? 'N/A'); ?></span>
+                                                <span style="color:#9ca3af;"><i class="fa-solid fa-arrow-down" style="font-size:10px;"></i></span>
+                                                <span><i class="fa-solid fa-user" style="color:#3b82f6;width:16px;"></i> <?php echo htmlspecialchars($d['consumer_name'] ?? 'N/A'); ?></span>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <?php if (!empty($d['volunteer_name'])): ?>
+                                                <span style="font-weight:600;color:var(--admin-text);"><?php echo htmlspecialchars($d['volunteer_name']); ?></span>
+                                            <?php else: ?>
+                                                <span style="color:#9ca3af;font-style:italic;">Not yet assigned</span>
+                                            <?php endif; ?>
+                                        </td>
+                                        <td><?php echo !empty($d['vehicle_type']) ? ucfirst($d['vehicle_type']) : '—'; ?></td>
+                                        <td><span style="display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:600;background:<?php echo $color; ?>20;color:<?php echo $color; ?>;"><i class="fa-solid <?php echo $icon; ?>" style="font-size:10px;"></i> <?php echo ucfirst(str_replace('_',' ',$d['status'])); ?></span></td>
+                                        <td style="font-size:12px;">
+                                            <div style="display:flex;align-items:center;gap:2px;">
+                                                <?php foreach ($timeline_steps as $i => $step): 
+                                                    $stepColor = ($i <= $current_idx) ? $statusColors[$step] : '#d1d5db';
+                                                ?>
+                                                    <span style="width:14px;height:14px;border-radius:50%;background:<?php echo $stepColor; ?>;display:inline-flex;align-items:center;justify-content:center;">
+                                                        <i class="fa-solid fa-check" style="font-size:7px;color:#fff;"></i>
+                                                    </span>
+                                                    <?php if ($i < count($timeline_steps) - 1): ?>
+                                                        <span style="width:8px;height:2px;background:<?php echo $stepColor; ?>;display:inline-block;"></span>
+                                                    <?php endif; ?>
+                                                <?php endforeach; ?>
+                                            </div>
+                                        </td>
+                                        <td style="white-space:nowrap;font-size:13px;"><?php echo date('d M Y',strtotime($d['created_at'])); ?></td>
+                                    </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                        <?php endif; ?>
+                    </div>
+                </div>
+
+                <!-- Recent Activity Feed & Top Volunteers -->
+                <div style="display:grid;grid-template-columns:1.5fr 1fr;gap:20px;margin-bottom:24px;">
+                    <!-- Activity Feed -->
+                    <div class="admin-card">
+                        <div class="admin-card-header">
+                            <h3><i class="fa-solid fa-clock-rotate-left"></i> Recent Activity</h3>
+                            <span class="badge badge-info"><?php echo count($vol_activity['recent_activity']); ?> events</span>
+                        </div>
+                        <div class="admin-card-body" style="max-height:320px;overflow-y:auto;padding:0;">
+                            <?php if (empty($vol_activity['recent_activity'])): ?>
+                                <div class="empty-state" style="padding:24px;">
+                                    <i class="fa-solid fa-inbox"></i>
+                                    <p>No recent activity.</p>
+                                </div>
+                            <?php else: ?>
+                                <div style="display:flex;flex-direction:column;">
+                                    <?php foreach ($vol_activity['recent_activity'] as $event): 
+                                        $eventColors = ['assigned'=>'#f59e0b','accepted'=>'#3b82f6','picked_up'=>'#8b5cf6','in_transit'=>'#06b6d4','delivered'=>'#059669','cancelled'=>'#ef4444'];
+                                        $eventIcons = ['assigned'=>'fa-clock','accepted'=>'fa-check-circle','picked_up'=>'fa-box-open','in_transit'=>'fa-truck','delivered'=>'fa-check-double','cancelled'=>'fa-ban'];
+                                        $ec = $eventColors[$event['status']] ?? '#6b7280';
+                                        $ei = $eventIcons[$event['status']] ?? 'fa-circle';
+                                    ?>
+                                        <div style="display:flex;align-items:flex-start;gap:12px;padding:10px 16px;border-bottom:1px solid var(--admin-border);transition:background 0.2s;" onmouseover="this.style.background='var(--admin-bg-light)'" onmouseout="this.style.background=''">
+                                            <div style="width:32px;height:32px;border-radius:50%;background:<?php echo $ec; ?>20;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                                                <i class="fa-solid <?php echo $ei; ?>" style="color:<?php echo $ec; ?>;font-size:14px;"></i>
+                                            </div>
+                                            <div style="flex:1;min-width:0;font-size:13px;">
+                                                <strong><?php echo htmlspecialchars($event['volunteer_name'] ?? 'System'); ?></strong>
+                                                <span style="color:var(--admin-text-muted);">
+                                                    <?php echo $event['status'] === 'assigned' ? 'assigned to deliver' : ($event['status'] === 'accepted' ? 'accepted delivery of' : ($event['status'] === 'delivered' ? 'completed delivery of' : 'updated status to ' . $event['status'] . ' for')); ?>
+                                                </span>
+                                                <strong><?php echo htmlspecialchars($event['food_item']); ?></strong>
+                                                <div style="margin-top:2px;font-size:11px;color:#9ca3af;">
+                                                    Donor: <?php echo htmlspecialchars($event['donor_name']); ?> 
+                                                    — Consumer: <?php echo htmlspecialchars($event['consumer_name']); ?>
+                                                </div>
+                                            </div>
+                                            <span style="font-size:11px;color:#9ca3af;white-space:nowrap;flex-shrink:0;"><?php echo date('d M H:i',strtotime($event['updated_at'])); ?></span>
+                                        </div>
+                                    <?php endforeach; ?>
+                                </div>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+
+                    <!-- Top Volunteers -->
+                    <div class="admin-card">
+                        <div class="admin-card-header">
+                            <h3><i class="fa-solid fa-trophy"></i> Top Volunteers</h3>
+                            <span class="badge badge-success">Leaderboard</span>
+                        </div>
+                        <div class="admin-card-body">
+                            <?php if (empty($vol_activity['top_volunteers'])): ?>
+                                <div class="empty-state" style="padding:24px;">
+                                    <i class="fa-solid fa-trophy"></i>
+                                    <p>No completed deliveries yet.</p>
+                                </div>
+                            <?php else: ?>
+                                <div style="display:flex;flex-direction:column;gap:0;">
+                                    <?php $rank = 1; foreach ($vol_activity['top_volunteers'] as $tv): 
+                                        $medal = $rank === 1 ? '🥇' : ($rank === 2 ? '🥈' : ($rank === 3 ? '🥉' : '#' . $rank));
+                                    ?>
+                                        <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 8px;border-bottom:1px solid var(--admin-border);">
+                                            <div style="display:flex;align-items:center;gap:10px;">
+                                                <span style="font-size:18px;font-weight:700;"><?php echo $medal; ?></span>
+                                                <div>
+                                                    <div style="font-weight:600;font-size:14px;"><?php echo htmlspecialchars($tv['volunteer_name']); ?></div>
+                                                </div>
+                                            </div>
+                                            <span style="background:#059669;color:#fff;padding:4px 12px;border-radius:999px;font-size:12px;font-weight:700;">
+                                                <?php echo (int)$tv['completed_count']; ?> delivered
+                                            </span>
+                                        </div>
+                                    <?php $rank++; endforeach; ?>
+                                </div>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+
+            <!-- ============================== -->
+            <!-- TEAM SECTION                 -->
+            <!-- ============================== -->
+            <?php elseif ($section === 'team'): ?>
+
+                <?php
+                $edit_member = null;
+                if (isset($_GET['edit_id'])) {
+                    $stmt = $pdo->prepare("SELECT * FROM team_members WHERE id = ?");
+                    $stmt->execute([intval($_GET['edit_id'])]);
+                    $edit_member = $stmt->fetch();
+                }
+                ?>
+
+                <div class="section-header">
+                    <div>
+                        <h1><i class="fa-solid fa-people-group"></i> Team Members</h1>
+                        <p>Manage the development team members displayed on the Our Team page.</p>
+                    </div>
+                </div>
+
+                <div class="stats-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:24px;">
+                    <div class="stat-card">
+                        <div class="stat-card-icon green"><i class="fa-solid fa-users"></i></div>
+                        <div class="stat-card-body">
+                            <div class="stat-card-value"><?php echo count($all_team_members); ?></div>
+                            <div class="stat-card-label">Total Members</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-card-icon blue"><i class="fa-solid fa-circle-check"></i></div>
+                        <div class="stat-card-body">
+                            <div class="stat-card-value"><?php echo count($team_members); ?></div>
+                            <div class="stat-card-label">Active Members</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-card-icon amber"><i class="fa-solid fa-user-plus"></i></div>
+                        <div class="stat-card-body">
+                            <div class="stat-card-value"><?php echo count($all_team_members) - count($team_members); ?></div>
+                            <div class="stat-card-label">Inactive</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Add/Edit Form -->
+                <div class="admin-card" style="margin-bottom:20px;">
+                    <div class="admin-card-header">
+                        <h3><i class="fa-solid fa-<?php echo $edit_member ? 'pen-to-square' : 'plus'; ?>"></i> <?php echo $edit_member ? 'Edit Team Member' : 'Add New Team Member'; ?></h3>
+                    </div>
+                    <div class="admin-card-body">
+                        <form action="admin.php?section=team" method="POST" enctype="multipart/form-data">
+                            <input type="hidden" name="action" value="<?php echo $edit_member ? 'update_team_member' : 'create_team_member'; ?>">
+                            <?php if ($edit_member): ?>
+                                <input type="hidden" name="member_id" value="<?php echo $edit_member['id']; ?>">
+                            <?php endif; ?>
+
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Full Name *</label>
+                                    <input type="text" name="name" class="form-control" value="<?php echo htmlspecialchars($edit_member['name'] ?? ''); ?>" required>
+                                </div>
+                                <div class="form-group">
+                                    <label>Role / Title *</label>
+                                    <input type="text" name="role" class="form-control" placeholder="E.g., Lead Developer, Designer" value="<?php echo htmlspecialchars($edit_member['role'] ?? ''); ?>" required>
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label>Bio</label>
+                                <textarea name="bio" class="form-control" rows="3" placeholder="Brief description of the team member"><?php echo htmlspecialchars($edit_member['bio'] ?? ''); ?></textarea>
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Photo</label>
+                                    <input type="file" name="photo" class="form-control" accept="image/jpeg,image/png,image/gif,image/webp">
+                                    <div class="validation-hint">Accepted: JPEG, PNG, GIF, WebP (max 5MB)</div>
+                                    <?php if (!empty($edit_member['photo'])): ?>
+                                        <div style="margin-top:8px;display:flex;align-items:center;gap:10px;">
+                                            <img src="../<?php echo htmlspecialchars($edit_member['photo']); ?>" alt="Current photo" style="width:48px;height:48px;border-radius:50%;object-fit:cover;border:2px solid #e5e7eb;">
+                                            <span style="font-size:12px;color:var(--admin-text-muted);">Current photo</span>
+                                        </div>
+                                    <?php endif; ?>
+                                </div>
+                                <div class="form-group">
+                                    <label>Email</label>
+                                    <input type="email" name="email" class="form-control" placeholder="member@sayog.org" value="<?php echo htmlspecialchars($edit_member['email'] ?? ''); ?>">
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label><i class="fa-brands fa-linkedin"></i> LinkedIn</label>
+                                    <input type="url" name="linkedin" class="form-control" placeholder="https://linkedin.com/in/..." value="<?php echo htmlspecialchars($edit_member['linkedin'] ?? ''); ?>">
+                                </div>
+                                <div class="form-group">
+                                    <label><i class="fa-brands fa-github"></i> GitHub</label>
+                                    <input type="url" name="github" class="form-control" placeholder="https://github.com/..." value="<?php echo htmlspecialchars($edit_member['github'] ?? ''); ?>">
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label><i class="fa-solid fa-globe"></i> Website</label>
+                                    <input type="url" name="website" class="form-control" placeholder="https://..." value="<?php echo htmlspecialchars($edit_member['website'] ?? ''); ?>">
+                                </div>
+                                <div class="form-group">
+                                    <label>Display Order</label>
+                                    <input type="number" name="display_order" class="form-control" value="<?php echo (int)($edit_member['display_order'] ?? 0); ?>" min="0">
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Status</label>
+                                    <select name="status" class="form-control">
+                                        <option value="active" <?php echo ($edit_member['status'] ?? 'active') === 'active' ? 'selected' : ''; ?>>Active</option>
+                                        <option value="inactive" <?php echo ($edit_member['status'] ?? '') === 'inactive' ? 'selected' : ''; ?>>Inactive</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div style="display:flex;gap:12px;margin-top:8px;">
+                                <button type="submit" class="btn btn-primary"><i class="fa-solid fa-floppy-disk"></i> <?php echo $edit_member ? 'Update Member' : 'Add Member'; ?></button>
+                                <?php if ($edit_member): ?>
+                                    <a href="admin.php?section=team" class="btn btn-secondary"><i class="fa-solid fa-xmark"></i> Cancel</a>
+                                <?php endif; ?>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Team Members Table -->
+                <div class="admin-card">
+                    <div class="admin-card-header">
+                        <h3><i class="fa-solid fa-list"></i> All Team Members</h3>
+                        <span class="badge badge-info"><?php echo count($all_team_members); ?> members</span>
+                    </div>
+                    <div class="admin-card-body" style="padding:0;">
+                        <?php if (empty($all_team_members)): ?>
+                            <div class="empty-state" style="padding:40px 20px;">
+                                <i class="fa-solid fa-people-group"></i>
+                                <h3>No team members yet</h3>
+                                <p>Add your first team member using the form above.</p>
+                            </div>
+                        <?php else: ?>
+                        <div class="table-wrapper">
+                            <table class="modern-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width:50px;">#</th>
+                                        <th>Member</th>
+                                        <th>Role</th>
+                                        <th>Social</th>
+                                        <th>Order</th>
+                                        <th>Status</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <?php $sn = 1; foreach ($all_team_members as $m): ?>
+                                    <tr>
+                                        <td data-label="#"><span class="badge badge-neutral"><?php echo $sn++; ?></span></td>
+                                        <td data-label="Member">
+                                            <div class="user-cell">
+                                                <?php if (!empty($m['photo'])): ?>
+                                                    <img src="../<?php echo htmlspecialchars($m['photo']); ?>" alt="" style="width:34px;height:34px;border-radius:50%;object-fit:cover;">
+                                                <?php else: ?>
+                                                    <div class="user-avatar"><?php echo strtoupper(substr($m['name'], 0, 1)); ?></div>
+                                                <?php endif; ?>
+                                                <div>
+                                                    <div class="user-name"><?php echo htmlspecialchars($m['name']); ?></div>
+                                                    <?php if (!empty($m['email'])): ?>
+                                                        <div class="user-email"><?php echo htmlspecialchars($m['email']); ?></div>
+                                                    <?php endif; ?>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td data-label="Role"><span class="badge badge-info"><?php echo htmlspecialchars($m['role']); ?></span></td>
+                                        <td data-label="Social">
+                                            <div style="display:flex;gap:6px;">
+                                                <?php if (!empty($m['linkedin'])): ?><a href="<?php echo htmlspecialchars($m['linkedin']); ?>" target="_blank" title="LinkedIn" style="color:#0a66c2;"><i class="fa-brands fa-linkedin"></i></a><?php endif; ?>
+                                                <?php if (!empty($m['github'])): ?><a href="<?php echo htmlspecialchars($m['github']); ?>" target="_blank" title="GitHub" style="color:#333;"><i class="fa-brands fa-github"></i></a><?php endif; ?>
+                                            </div>
+                                        </td>
+                                        <td data-label="Order"><span class="badge badge-neutral"><?php echo (int)$m['display_order']; ?></span></td>
+                                        <td data-label="Status">
+                                            <span class="badge badge-<?php echo $m['status'] === 'active' ? 'success' : 'danger'; ?>">
+                                                <?php echo ucfirst($m['status']); ?>
+                                            </span>
+                                        </td>
+                                        <td data-label="Actions">
+                                            <div class="table-actions">
+                                                <a href="admin.php?section=team&edit_id=<?php echo $m['id']; ?>" class="btn btn-sm btn-outline"><i class="fa-solid fa-pen"></i> Edit</a>
+                                                <form action="admin.php?section=team" method="POST" class="inline-form" onsubmit="return confirm('Delete this team member?');">
+                                                    <input type="hidden" name="action" value="delete_team_member">
+                                                    <input type="hidden" name="member_id" value="<?php echo $m['id']; ?>">
+                                                    <button type="submit" class="btn btn-sm btn-danger" style="color:red"><i class="fa-solid fa-trash-can"></i> Delete</button>
+                                                </form>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                        <?php endif; ?>
+                    </div>
+                </div>
+
+            <!-- ============================== -->
+            <!-- CHATBOT SECTION               -->
+            <!-- ============================== -->
+            <?php elseif ($section === 'chatbot'):
+                $chatbot_tab = sanitize($_GET['tab'] ?? 'dashboard');
+                $valid_chatbot_tabs = ['dashboard', 'faq', 'settings', 'logs', 'analytics'];
+                if (!in_array($chatbot_tab, $valid_chatbot_tabs)) $chatbot_tab = 'dashboard';
+                ?>
+                <div style="display:flex;gap:0;margin-bottom:24px;background:#fff;border-radius:12px;overflow:hidden;border:1px solid var(--admin-border);box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+                    <a href="admin.php?section=chatbot&tab=dashboard" class="cms-tab <?php echo $chatbot_tab === 'dashboard' ? 'active' : ''; ?>"><i class="fa-solid fa-gauge"></i> Dashboard</a>
+                    <a href="admin.php?section=chatbot&tab=faq" class="cms-tab <?php echo $chatbot_tab === 'faq' ? 'active' : ''; ?>"><i class="fa-solid fa-book"></i> FAQ Manager</a>
+                    <a href="admin.php?section=chatbot&tab=settings" class="cms-tab <?php echo $chatbot_tab === 'settings' ? 'active' : ''; ?>"><i class="fa-solid fa-sliders"></i> Settings</a>
+                    <a href="admin.php?section=chatbot&tab=logs" class="cms-tab <?php echo $chatbot_tab === 'logs' ? 'active' : ''; ?>"><i class="fa-solid fa-clock-rotate-left"></i> Logs</a>
+                    <a href="admin.php?section=chatbot&tab=analytics" class="cms-tab <?php echo $chatbot_tab === 'analytics' ? 'active' : ''; ?>"><i class="fa-solid fa-chart-line"></i> Analytics</a>
+                </div>
+
+                <?php
+                if ($chatbot_tab === 'dashboard') {
+                    require_once __DIR__ . '/../chatbot/admin/chatbot_dashboard.php';
+                } elseif ($chatbot_tab === 'faq') {
+                    require_once __DIR__ . '/../chatbot/admin/faq_manager.php';
+                } elseif ($chatbot_tab === 'settings') {
+                    require_once __DIR__ . '/../chatbot/admin/chatbot_settings.php';
+                } elseif ($chatbot_tab === 'logs') {
+                    require_once __DIR__ . '/../chatbot/admin/conversation_logs.php';
+                } elseif ($chatbot_tab === 'analytics') {
+                    require_once __DIR__ . '/../chatbot/admin/chatbot_analytics.php';
+                }
+                ?>
 
             <!-- ============================== -->
             <!-- CMS SECTION                   -->
@@ -1567,4 +2486,206 @@ document.addEventListener('DOMContentLoaded', () => {
 </script>
 
 </body>
-</html>
+
+            <?php if ($section === 'smtp'): 
+                require_once __DIR__ . '/../smtp_config.php';
+                
+                // Fetch current settings
+                $stmt = $pdo->prepare("SELECT * FROM smtp_settings WHERE id = 1");
+                $stmt->execute();
+                $smtp_settings = $stmt->fetch();
+                if (!$smtp_settings) {
+                    $smtp_settings = [
+                        'id' => 1, 'host' => '', 'port' => 587, 'username' => '', 'password' => '',
+                        'encryption' => 'tls', 'from_email' => '', 'from_name' => 'Sayog', 'is_active' => 0
+                    ];
+                }
+                
+                // Handle save action
+                $smtp_saved = false;
+                $smtp_tested = null;
+                
+                if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+                    $smtp_action = $_POST['smtp_action'] ?? '';
+                    
+                    if ($smtp_action === 'save_settings') {
+                        $saveData = [
+                            'id'         => 1,
+                            'host'       => sanitize($_POST['host'] ?? ''),
+                            'port'       => (int)($_POST['port'] ?? 587),
+                            'username'   => sanitize($_POST['username'] ?? ''),
+                            'password'   => $_POST['password'] ?? '',
+                            'encryption' => sanitize($_POST['encryption'] ?? 'tls'),
+                            'from_email' => sanitize($_POST['from_email'] ?? ''),
+                            'from_name'  => sanitize($_POST['from_name'] ?? 'Sayog'),
+                            'is_active'  => !empty($_POST['is_active']) ? 1 : 0,
+                        ];
+                        // Only update password if provided
+                        if (empty($saveData['password'])) {
+                            unset($saveData['password']);
+                        }
+                        if (save_smtp_settings($pdo, $saveData)) {
+                            $smtp_saved = true;
+                            // Re-fetch to show updated values
+                            $stmt = $pdo->prepare("SELECT * FROM smtp_settings WHERE id = 1");
+                            $stmt->execute();
+                            $smtp_settings = $stmt->fetch();
+                        }
+                    }
+                    
+                    if ($smtp_action === 'test_connection') {
+                        $test_email = sanitize($_POST['test_email'] ?? '');
+                        if (!empty($test_email) && filter_var($test_email, FILTER_VALIDATE_EMAIL)) {
+                            $smtp_tested = test_smtp_connection($pdo, $test_email);
+                        } else {
+                            $smtp_tested = ['success' => false, 'message' => 'Please enter a valid email address to test.'];
+                        }
+                    }
+                }
+                ?>
+                
+                <div class="section-header">
+                    <div>
+                        <h1><i class="fa-solid fa-envelope"></i> SMTP Configuration</h1>
+                        <p>Configure your email server settings for sending OTPs and notifications</p>
+                    </div>
+                </div>
+
+                <?php if ($smtp_saved): ?>
+                    <div class="admin-alert admin-alert-success">
+                        <i class="fa-solid fa-circle-check"></i> SMTP settings saved successfully!
+                    </div>
+                <?php endif; ?>
+
+                <?php if ($smtp_tested): ?>
+                    <div class="admin-alert admin-alert-<?php echo $smtp_tested['success'] ? 'success' : 'danger'; ?>">
+                        <i class="fa-solid <?php echo $smtp_tested['success'] ? 'fa-circle-check' : 'fa-circle-xmark'; ?>"></i>
+                        <?php echo htmlspecialchars($smtp_tested['message']); ?>
+                    </div>
+                <?php endif; ?>
+
+                <div class="admin-card" style="margin-bottom:24px;">
+                    <div class="admin-card-header">
+                        <h3><i class="fa-solid fa-server"></i> SMTP Server Settings</h3>
+                        <span class="badge badge-<?php echo !empty($smtp_settings['is_active']) && !empty($smtp_settings['host']) ? 'success' : 'danger'; ?>">
+                            <?php echo !empty($smtp_settings['is_active']) && !empty($smtp_settings['host']) ? 'Active' : 'Inactive'; ?>
+                        </span>
+                    </div>
+                    <div class="admin-card-body">
+                        <form method="POST" action="admin.php?section=smtp" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+                            <input type="hidden" name="smtp_action" value="save_settings">
+                            
+                            <div style="grid-column:1/-1;">
+                                <label style="display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600;cursor:pointer;">
+                                    <input type="checkbox" name="is_active" value="1" <?php echo !empty($smtp_settings['is_active']) ? 'checked' : ''; ?> style="width:18px;height:18px;">
+                                    Enable SMTP Email Sending
+                                </label>
+                                <p style="margin:4px 0 0 0;font-size:12px;color:#6b7280;">When enabled, all emails will be sent via SMTP instead of PHP mail().</p>
+                            </div>
+
+                            <div>
+                                <label style="display:block;font-size:13px;font-weight:600;margin-bottom:4px;color:var(--admin-text);">SMTP Host *</label>
+                                <input type="text" name="host" value="<?php echo htmlspecialchars($smtp_settings['host'] ?? ''); ?>" placeholder="e.g., smtp.gmail.com" required style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;">
+                            </div>
+                            <div>
+                                <label style="display:block;font-size:13px;font-weight:600;margin-bottom:4px;color:var(--admin-text);">Port *</label>
+                                <input type="number" name="port" value="<?php echo (int)($smtp_settings['port'] ?? 587); ?>" placeholder="587" required style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;">
+                            </div>
+                            <div>
+                                <label style="display:block;font-size:13px;font-weight:600;margin-bottom:4px;color:var(--admin-text);">Username</label>
+                                <input type="text" name="username" value="<?php echo htmlspecialchars($smtp_settings['username'] ?? ''); ?>" placeholder="your-email@gmail.com" style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;">
+                            </div>
+                            <div>
+                                <label style="display:block;font-size:13px;font-weight:600;margin-bottom:4px;color:var(--admin-text);">Password</label>
+                                <input type="password" name="password" value="" placeholder="Enter new password" style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;">
+                                <p style="margin:2px 0 0;font-size:11px;color:#9ca3af;">Leave empty to keep current password.</p>
+                            </div>
+                            <div>
+                                <label style="display:block;font-size:13px;font-weight:600;margin-bottom:4px;color:var(--admin-text);">Encryption</label>
+                                <select name="encryption" style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;background:#fff;">
+                                    <option value="tls" <?php echo ($smtp_settings['encryption'] ?? 'tls') === 'tls' ? 'selected' : ''; ?>>TLS (Recommended)</option>
+                                    <option value="ssl" <?php echo ($smtp_settings['encryption'] ?? '') === 'ssl' ? 'selected' : ''; ?>>SSL</option>
+                                    <option value="none" <?php echo ($smtp_settings['encryption'] ?? '') === 'none' ? 'selected' : ''; ?>>None</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label style="display:block;font-size:13px;font-weight:600;margin-bottom:4px;color:var(--admin-text);">From Email *</label>
+                                <input type="email" name="from_email" value="<?php echo htmlspecialchars($smtp_settings['from_email'] ?? ''); ?>" placeholder="noreply@yourdomain.com" required style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;">
+                            </div>
+                            <div>
+                                <label style="display:block;font-size:13px;font-weight:600;margin-bottom:4px;color:var(--admin-text);">From Name</label>
+                                <input type="text" name="from_name" value="<?php echo htmlspecialchars($smtp_settings['from_name'] ?? 'Sayog'); ?>" placeholder="Sayog" style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;">
+                            </div>
+
+                            <div style="grid-column:1/-1;display:flex;gap:12px;justify-content:flex-end;padding-top:8px;border-top:1px solid #e5e7eb;">
+                                <button type="submit" class="btn btn-primary" style="padding:10px 24px;">
+                                    <i class="fa-solid fa-floppy-disk"></i> Save Settings
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Test Connection -->
+                <div class="admin-card">
+                    <div class="admin-card-header">
+                        <h3><i class="fa-solid fa-vial"></i> Test Connection</h3>
+                    </div>
+                    <div class="admin-card-body">
+                        <form method="POST" action="admin.php?section=smtp" onsubmit="return testSmtpConnection(this);">
+                            <input type="hidden" name="smtp_action" value="test_connection">
+                            <p style="margin:0 0 12px;font-size:14px;color:#6b7280;">Send a test email to verify your SMTP configuration is working correctly.</p>
+                            <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+                                <input type="email" name="test_email" id="testEmail" value="<?php echo htmlspecialchars($smtp_settings['from_email'] ?? ''); ?>" placeholder="Enter email to send test to" required style="flex:1;min-width:220px;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;">
+                                <button type="submit" class="btn btn-secondary" style="padding:10px 24px;">
+                                    <i class="fa-solid fa-paper-plane"></i> Send Test Email
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Provider Quick Reference -->
+                <div class="admin-card" style="margin-top:24px;">
+                    <div class="admin-card-header">
+                        <h3><i class="fa-solid fa-book"></i> Common SMTP Provider Settings</h3>
+                    </div>
+                    <div class="admin-card-body">
+                        <div style="overflow-x:auto;">
+                            <table class="detail-table" style="width:100%;font-size:13px;">
+                                <thead>
+                                    <tr style="background:#f9fafb;">
+                                        <th style="padding:10px 12px;text-align:left;font-weight:600;">Provider</th>
+                                        <th style="padding:10px 12px;text-align:left;font-weight:600;">Host</th>
+                                        <th style="padding:10px 12px;text-align:left;font-weight:600;">Port</th>
+                                        <th style="padding:10px 12px;text-align:left;font-weight:600;">Encryption</th>
+                                        <th style="padding:10px 12px;text-align:left;font-weight:600;">Notes</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td style="padding:8px 12px;"><strong>Gmail</strong></td><td style="padding:8px 12px;">smtp.gmail.com</td><td style="padding:8px 12px;">587</td><td style="padding:8px 12px;">TLS</td><td style="padding:8px 12px;">Use App Password (2FA required)</td></tr>
+                                    <tr style="background:#f9fafb;"><td style="padding:8px 12px;"><strong>Outlook</strong></td><td style="padding:8px 12px;">smtp.office365.com</td><td style="padding:8px 12px;">587</td><td style="padding:8px 12px;">TLS</td><td style="padding:8px 12px;">Microsoft 365 / Hotmail</td></tr>
+                                    <tr><td style="padding:8px 12px;"><strong>Yahoo</strong></td><td style="padding:8px 12px;">smtp.mail.yahoo.com</td><td style="padding:8px 12px;">587</td><td style="padding:8px 12px;">TLS</td><td style="padding:8px 12px;">Use App Password</td></tr>
+                                    <tr style="background:#f9fafb;"><td style="padding:8px 12px;"><strong>Zoho</strong></td><td style="padding:8px 12px;">smtp.zoho.com</td><td style="padding:8px 12px;">587</td><td style="padding:8px 12px;">TLS</td><td style="padding:8px 12px;">Zoho Mail accounts</td></tr>
+                                    <tr><td style="padding:8px 12px;"><strong>SendGrid</strong></td><td style="padding:8px 12px;">smtp.sendgrid.net</td><td style="padding:8px 12px;">587</td><td style="padding:8px 12px;">TLS</td><td style="padding:8px 12px;">Username: apikey / Password: your API key</td></tr>
+                                    <tr style="background:#f9fafb;"><td style="padding:8px 12px;"><strong>cPanel</strong></td><td style="padding:8px 12px;">mail.yourdomain.com</td><td style="padding:8px 12px;">587</td><td style="padding:8px 12px;">TLS</td><td style="padding:8px 12px;">Use your full email as username</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <p style="margin:12px 0 0;font-size:12px;color:#9ca3af;">
+                            <i class="fa-solid fa-info-circle"></i> After saving settings, click "Send Test Email" to verify everything works.
+                        </p>
+                    </div>
+                </div>
+                <script>
+                function testSmtpConnection(form) {
+                    var btn = form.querySelector('button[type="submit"]');
+                    btn.disabled = true;
+                    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Sending...';
+                    return true;
+                }
+                </script>
+            <?php endif; ?>
+
+            <!-- Enhanced volunteer section now renders above (inside admin-content) -->
+        </html>

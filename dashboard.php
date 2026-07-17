@@ -29,7 +29,7 @@ $successes = [];
 
 // Determine active page/tab
 $page = sanitize($_GET['page'] ?? 'home');
-$valid_pages = ['home', 'create-donation', 'donation_approval', 'request-donation', 'manage-donation', 'manage-request', 'track-donation', 'track-request', 'profile', 'notifications'];
+$valid_pages = ['home', 'create-donation', 'donation_approval', 'request-donation', 'manage-donation', 'manage-request', 'track-donation', 'track-request', 'profile', 'notifications', 'volunteer'];
 if (!in_array($page, $valid_pages)) {
     $page = 'home';
 }
@@ -132,9 +132,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         if (empty($errors)) {
-            try {
-                $stmt = $pdo->prepare("INSERT INTO donations (donor_id, food_item, quantity, expiry_time, pickup_address, phone, description, image_path, video_path, status, verification_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_review', 'pending')");
-                $stmt->execute([$user_id, $food_item, $quantity, $expiry_time, $pickup_address, $phone, $description, $image_path, $video_path]);
+            
+        // Geocode pickup address for map pin
+        $latitude = null;
+        $longitude = null;
+        $city = null;
+        if (!empty($pickup_address)) {
+            $geo_result = geocode_address_nepal($pickup_address);
+            if ($geo_result) {
+                $latitude = $geo_result['lat'];
+                $longitude = $geo_result['lng'];
+                $city = $geo_result['city'] ?? null;
+            }
+        }
+try {
+                $stmt = $pdo->prepare("INSERT INTO donations (donor_id, food_item, quantity, expiry_time, pickup_address, phone, latitude, longitude, city, description, image_path, video_path, status, verification_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_review', 'pending')");
+                $stmt->execute([$user_id, $food_item, $quantity, $expiry_time, $pickup_address, $phone, $latitude, $longitude, $city, $description, $image_path, $video_path]);
                 create_notification(
                     $pdo,
                     $user_id,
@@ -680,6 +693,157 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
+    // Action: Select Delivery Method (Consumer selects after donor approves)
+    if ($action === 'select_delivery_method') {
+        $donation_id = intval($_POST['donation_id'] ?? 0);
+        $request_id = intval($_POST['request_id'] ?? 0);
+        $delivery_method = sanitize($_POST['delivery_method'] ?? '');
+
+        if (!in_array($delivery_method, ['self_pickup', 'volunteer'])) {
+            $errors[] = 'Invalid delivery method selected.';
+        }
+
+        if (empty($errors)) {
+            try {
+                $pdo->beginTransaction();
+                $stmt = $pdo->prepare("UPDATE donations SET delivery_method = ? WHERE id = ?");
+                $stmt->execute([$delivery_method, $donation_id]);
+                $stmt = $pdo->prepare("UPDATE requests SET delivery_method = ? WHERE id = ?");
+                $stmt->execute([$delivery_method, $request_id]);
+
+                if ($delivery_method === 'volunteer') {
+                    // Get donor + consumer info
+                    $stmt = $pdo->prepare("SELECT r.consumer_id, d.donor_id FROM requests r JOIN donations d ON r.donation_id = d.id WHERE r.id = ?");
+                    $stmt->execute([$request_id]);
+                    $r = $stmt->fetch();
+                    $dStmt = $pdo->prepare("SELECT food_item FROM donations WHERE id = ?");
+                    $dStmt->execute([$donation_id]);
+                    $food = $dStmt->fetchColumn();
+
+                    create_volunteer_delivery($pdo, $donation_id, $request_id, $r['consumer_id'], $r['donor_id']);
+
+                    create_notification($pdo, $r['donor_id'], 'delivery_needed',
+                        'The consumer has requested a volunteer for "' . $food . '". It will appear in the volunteer hub.',
+                        'dashboard.php?page=manage-donation', true);
+                }
+
+                $pdo->commit();
+                set_flash_message('success', $delivery_method === 'volunteer' 
+                    ? 'Volunteer delivery selected! A delivery request has been created and nearby volunteers will be notified.' 
+                    : 'Self-pickup selected! Coordinate with the donor directly for pickup.');
+                redirect('dashboard.php?page=track-request');
+            } catch (Exception $e) {
+                $pdo->rollBack();
+                $errors[] = 'Failed to set delivery method: ' . $e->getMessage();
+            }
+        }
+    }
+
+    // Action: Volunteer Accepts Delivery
+    if ($action === 'accept_volunteer_delivery') {
+        $delivery_id = intval($_POST['delivery_id'] ?? 0);
+        if ($delivery_id <= 0) {
+            $errors[] = 'Invalid delivery request.';
+        }
+        if (empty($errors)) {
+            if (accept_volunteer_delivery($pdo, $delivery_id, $user_id)) {
+                set_flash_message('success', 'Delivery accepted! You can now contact the donor and consumer.');
+                redirect('dashboard.php?page=volunteer');
+            } else {
+                $errors[] = 'Could not accept delivery. It may have been taken by another volunteer.';
+            }
+        }
+    }
+
+    // Action: Update Volunteer Delivery Status (picked_up, in_transit, delivered)
+    if ($action === 'update_volunteer_delivery_status') {
+        $delivery_id = intval($_POST['delivery_id'] ?? 0);
+        $new_status = sanitize($_POST['delivery_status'] ?? '');
+        $notes = sanitize($_POST['delivery_notes'] ?? '');
+
+        if ($delivery_id <= 0 || !in_array($new_status, ['picked_up', 'in_transit', 'delivered'])) {
+            $errors[] = 'Invalid delivery status update.';
+        }
+        if (empty($errors)) {
+            if (update_delivery_status($pdo, $delivery_id, $user_id, $new_status, $notes)) {
+                $status_labels = ['picked_up' => 'Marked as Picked Up', 'in_transit' => 'Marked as In Transit', 'delivered' => 'Marked as Delivered'];
+                set_flash_message('success', 'Delivery ' . ($status_labels[$new_status] ?? 'updated') . '!');
+                redirect('dashboard.php?page=volunteer');
+            } else {
+                $errors[] = 'Could not update delivery status.';
+            }
+        }
+    }
+
+    // Action: Update Volunteer Online Status
+    if ($action === 'update_volunteer_status') {
+        $online_status = sanitize($_POST['online_status'] ?? '');
+        if (in_array($online_status, ['available', 'busy', 'offline'])) {
+            $stmt = $pdo->prepare("UPDATE volunteers SET online_status = ? WHERE user_id = ?");
+            $stmt->execute([$online_status, $user_id]);
+            set_flash_message('success', 'Status updated to ' . ucfirst($online_status) . '.');
+            redirect('dashboard.php?page=volunteer');
+        }
+    }
+
+    // Action: Submit Rating (for donor, receiver, or volunteer)
+    if ($action === 'submit_rating') {
+        $donation_id = intval($_POST['donation_id'] ?? 0);
+        $role = sanitize($_POST['role'] ?? '');
+        $rating = intval($_POST['rating'] ?? 0);
+        $review = sanitize($_POST['review'] ?? '');
+
+        if ($donation_id <= 0 || !in_array($role, ['donor', 'receiver', 'volunteer']) || $rating < 1 || $rating > 5) {
+            $errors[] = 'Invalid rating submission.';
+        }
+
+        if (empty($errors)) {
+            try {
+                // Find the ratings record for this donation
+                $stmt = $pdo->prepare("SELECT * FROM ratings WHERE donation_id = ?");
+                $stmt->execute([$donation_id]);
+                $rt = $stmt->fetch();
+
+                if ($role === 'donor') {
+                    // Receiver is rating the donor
+                    $stmt = $pdo->prepare("UPDATE ratings SET rating_donor = ?, review_donor = ? WHERE donation_id = ?");
+                    $stmt->execute([$rating, $review ?: null, $donation_id]);
+                    set_flash_message('success', 'Thank you for rating the donor!');
+                    // Keep rate_donation param so volunteer rating form still shows
+                    redirect('dashboard.php?page=track-request&rate_donation=' . $donation_id);
+                } elseif ($role === 'receiver') {
+                    // Donor is rating the receiver
+                    $stmt = $pdo->prepare("UPDATE ratings SET rating_receiver = ?, review_receiver = ? WHERE donation_id = ?");
+                    $stmt->execute([$rating, $review ?: null, $donation_id]);
+                    set_flash_message('success', 'Thank you for rating the receiver!');
+                    redirect('dashboard.php?page=track-donation&rate_donation=' . $donation_id);
+                } elseif ($role === 'volunteer') {
+                    // Consumer is rating the volunteer
+                    // Find volunteer_user_id from volunteer_deliveries
+                    $vStmt = $pdo->prepare("SELECT volunteer_user_id FROM volunteer_deliveries WHERE donation_id = ? AND volunteer_user_id IS NOT NULL LIMIT 1");
+                    $vStmt->execute([$donation_id]);
+                    $volUserId = $vStmt->fetchColumn();
+
+                    $stmt = $pdo->prepare("UPDATE ratings SET rating_volunteer = ?, review_volunteer = ?, volunteer_id = ? WHERE donation_id = ?");
+                    $stmt->execute([$rating, $review ?: null, $volUserId ?: null, $donation_id]);
+
+                    // Update volunteer's average rating in volunteers table
+                    if ($volUserId) {
+                        $avgStmt = $pdo->prepare("SELECT ROUND(AVG(rating_volunteer), 1) FROM ratings WHERE volunteer_id = ? AND rating_volunteer IS NOT NULL");
+                        $avgStmt->execute([$volUserId]);
+                        $avgRating = $avgStmt->fetchColumn() ?: 0;
+                        $pdo->prepare("UPDATE volunteers SET rating = ? WHERE user_id = ?")->execute([$avgRating, $volUserId]);
+                    }
+
+                    set_flash_message('success', 'Thank you for rating the volunteer!');
+                    redirect('dashboard.php?page=track-request');
+                }
+            } catch (PDOException $e) {
+                $errors[] = 'Failed to submit rating: ' . $e->getMessage();
+            }
+        }
+    }
+
     // Action: Update Profile
     if ($action === 'update_profile') {
         $name = sanitize($_POST['name'] ?? '');
@@ -729,7 +893,10 @@ $flash = get_flash_message();
     <link rel="stylesheet" href="style.css">
     <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="chatbot/chatbot.css">
     <script src="js/app.js"></script>
+    <script src="chatbot/chatbot.js"></script>
+<?php require_once __DIR__ . '/dashboard_volunteer_ui.php'; ?>
 </head>
 <body>
     <div class="app-container">
@@ -821,6 +988,29 @@ $flash = get_flash_message();
                     <span data-i18n="sidebar.my_profile">My Profile</span>
                 </a>
 
+                <?php
+                    $vol_status = get_volunteer_status($pdo, $user_id);
+                    if ($vol_status && $vol_status['status'] === 'approved'): ?>
+                    <a href="dashboard.php?page=volunteer" class="nav-item <?php echo $page === 'volunteer' ? 'active' : ''; ?>" style="border-top: 1px solid var(--border); margin-top: 8px; padding-top: 12px;">
+                        <i class="fa-solid fa-hand-holding-heart" style="color: #059669;"></i>
+                        <span style="font-weight: 700; color: #059669;">🧭 Volunteer Hub</span>
+                    </a>
+                    <?php elseif (!$vol_status): ?>
+                    <a href="become-volunteer.php" class="nav-item" style="background: rgba(5, 150, 105, 0.06); border: 1px dashed rgba(5, 150, 105, 0.2); border-radius: 10px; margin-top: 4px;">
+                        <i class="fa-solid fa-user-plus" style="color: #059669;"></i>
+                        <span style="font-weight: 600; color: #059669;">Become a Volunteer</span>
+                    </a>
+                    <?php elseif ($vol_status['status'] === 'pending'): ?>
+                    <a href="become-volunteer.php" class="nav-item" style="opacity: 0.7;">
+                        <i class="fa-solid fa-clock" style="color: #f59e0b;"></i>
+                        <span>⏳ Application Pending</span>
+                    </a>
+                    <?php elseif ($vol_status['status'] === 'rejected'): ?>
+                    <a href="become-volunteer.php" class="nav-item" style="opacity: 0.7;">
+                        <i class="fa-solid fa-circle-exclamation" style="color: #ef4444;"></i>
+                        <span>Reapply as Volunteer</span>
+                    </a>
+                    <?php endif; ?>
                 <a href="logout.php" class="nav-item nav-item-logout">
                     <i class="fa-solid fa-right-from-bracket"></i>
                     <span data-i18n="sidebar.logout">Log Out</span>
@@ -1251,7 +1441,7 @@ $flash = get_flash_message();
                         <div class="modal-container">
                             <div class="modal-header">
                                 <h3 class="modal-title">Submit Food Request</h3>
-                                <button class="modal-close" onclick="closeRequestModal()">&times;</button>
+                                <button class="modal-close" onclick="closeRequestModal()"><i class="fa-solid fa-xmark"></i></button>
                             </div>
                             <form action="dashboard.php?page=home" method="POST">
                                 <input type="hidden" name="action" value="request_donation">
@@ -1428,7 +1618,7 @@ $flash = get_flash_message();
                         <div class="modal-container">
                             <div class="modal-header">
                                 <h3 class="modal-title"><i class="fa-solid fa-gift" style="margin-right: 8px; color: var(--primary);"></i> Share Surplus Food</h3>
-                                <button class="modal-close" onclick="closeDonationModal()">&times;</button>
+                                <button class="modal-close" onclick="closeDonationModal()"><i class="fa-solid fa-xmark"></i></button>
                             </div>
                             <form action="dashboard.php?page=create-donation" method="POST" id="createDonationForm" enctype="multipart/form-data" novalidate>
                                 <input type="hidden" name="action" value="create_donation">
@@ -1734,7 +1924,7 @@ $flash = get_flash_message();
                         <div class="modal-container">
                             <div class="modal-header">
                                 <h3 class="modal-title">Submit Food Request</h3>
-                                <button class="modal-close" onclick="closeRequestModal()">&times;</button>
+                                <button class="modal-close" onclick="closeRequestModal()"><i class="fa-solid fa-xmark"></i></button>
                             </div>
                             <form action="dashboard.php?page=request-donation" method="POST">
                                 <input type="hidden" name="action" value="request_donation">
@@ -1797,6 +1987,197 @@ $flash = get_flash_message();
                 // =============================================================
                 // TAB: NOTIFICATIONS
                 // =============================================================
+                // =============================================================
+                // TAB: VOLUNTEER DASHBOARD
+                // =============================================================
+                } elseif ($page === 'volunteer') {
+                    $availableDeliveries = get_available_deliveries_for_volunteer($pdo, $user_id);
+                    $activeDeliveries = get_volunteer_active_deliveries($pdo, $user_id);
+                    $deliveryHistory = get_volunteer_delivery_history($pdo, $user_id, 10);
+                    $vol = get_volunteer_details($pdo, $user_id);
+                    if (!$vol || $vol['status'] !== 'approved'):
+                        echo '<div class="alert alert-warning"><i class="fa-solid fa-shield-halved"></i> Access denied. Your volunteer status is not approved.</div>';
+                    else:
+                    ?>
+                    <div style="max-width: 1000px; margin: 0 auto;">
+                        <!-- Volunteer Hero Profile Card -->
+                        <div style="background: linear-gradient(135deg, #059669 0%, #047857 100%); border-radius: 20px; padding: 32px; color: #fff; margin-bottom: 28px; position: relative; overflow: hidden;">
+                            <div style="position: absolute; top: -30px; right: -30px; width: 200px; height: 200px; background: rgba(255,255,255,0.05); border-radius: 50%;"></div>
+                            <div style="position: absolute; bottom: -50px; left: -20px; width: 150px; height: 150px; background: rgba(255,255,255,0.04); border-radius: 50%;"></div>
+                            <div style="display: flex; align-items: center; gap: 24px; flex-wrap: wrap; position: relative; z-index: 1;">
+                                <div style="width: 80px; height: 80px; border-radius: 50%; background: rgba(255,255,255,0.2); border: 3px solid rgba(255,255,255,0.3); display: flex; align-items: center; justify-content: center; font-size: 32px; overflow: hidden; flex-shrink: 0;">
+                                    <?php if (!empty($vol['profile_photo'])): ?>
+                                        <img src="<?php echo htmlspecialchars($vol['profile_photo']); ?>" style="width:100%;height:100%;object-fit:cover;">
+                                    <?php else: ?>
+                                        <i class="fa-solid fa-user"></i>
+                                    <?php endif; ?>
+                                </div>
+                                <div style="flex:1; min-width: 200px;">
+                                    <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                                        <h2 style="font-size: 26px; font-weight: 800; margin: 0; color: #fff;"><?php echo htmlspecialchars($vol['full_name'] ?? $vol['user_name']); ?></h2>
+                                        <span style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 12px; background: rgba(255,255,255,0.2); border-radius: 999px; font-size: 12px; font-weight: 700;">
+                                            <i class="fa-solid fa-circle-check"></i> Verified Volunteer
+                                        </span>
+                                    </div>
+                                    <div style="display: flex; flex-wrap: wrap; gap: 16px; margin-top: 8px; font-size: 14px; opacity: 0.9;">
+                                        <span><i class="fa-solid fa-id-card"></i> ID: <?php echo htmlspecialchars($vol['volunteer_id']); ?></span>
+                                        <span><i class="fa-solid fa-calendar"></i> Joined: <?php echo date('M Y', strtotime($vol['approved_at'])); ?></span>
+                                        <span><i class="fa-solid fa-truck"></i> <?php echo ucfirst($vol['vehicle_type']); ?> | <?php echo $vol['delivery_radius']; ?> km radius</span>
+                                    </div>
+                                </div>
+                                <div style="display: flex; gap: 16px; flex-wrap: wrap;">
+                                    <div style="text-align: center; padding: 12px 20px; background: rgba(255,255,255,0.12); border-radius: 14px;">
+                                        <div style="font-size: 28px; font-weight: 800;"><?php echo (int)$vol['completed_deliveries']; ?></div>
+                                        <div style="font-size: 11px; opacity: 0.8;">Deliveries</div>
+                                    </div>
+                                    <div style="text-align: center; padding: 12px 20px; background: rgba(255,255,255,0.12); border-radius: 14px;">
+                                        <div style="font-size: 28px; font-weight: 800;"><?php echo number_format((float)$vol['rating'], 1); ?></div>
+                                        <div style="font-size: 11px; opacity: 0.8;">Rating</div>
+                                    </div>
+                                    <div style="text-align: center; padding: 12px 20px; background: rgba(255,255,255,0.12); border-radius: 14px;">
+                                        <div style="font-size: 28px; font-weight: 800;"><?php echo (int)$vol['community_points']; ?></div>
+                                        <div style="font-size: 11px; opacity: 0.8;">Points</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Online Status Toggle -->
+                        <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 20px 24px; margin-bottom: 24px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;">
+                            <div>
+                                <h3 style="font-size: 16px; font-weight: 700; margin: 0 0 4px;">Online Status</h3>
+                                <p style="margin: 0; font-size: 13px; color: var(--text-secondary);">Set your availability to receive delivery requests.</p>
+                            </div>
+                            <div style="display: flex; gap: 8px;">
+                                <?php
+                                $statuses_list = ['available' => ['#10b981', 'fa-circle-check', 'Available'], 'busy' => ['#f59e0b', 'fa-clock', 'Busy'], 'offline' => ['#94a3b8', 'fa-circle', 'Offline']];
+                                foreach ($statuses_list as $st_val => [$st_color, $st_icon, $st_label]):
+                                    $st_active = $vol['online_status'] === $st_val;
+                                ?>
+                                <form action="dashboard.php?page=volunteer" method="POST" style="display:inline;">
+                                    <input type="hidden" name="action" value="update_volunteer_status">
+                                    <input type="hidden" name="online_status" value="<?php echo $st_val; ?>">
+                                    <button type="submit" style="display:flex; align-items:center; gap:6px; padding:8px 16px; border:2px solid <?php echo $st_active ? $st_color : 'var(--border)'; ?>; border-radius:10px; background:<?php echo $st_active ? 'rgba('.($st_val==='available'?'16,185,129':($st_val==='busy'?'245,158,11':'148,163,184')).',0.1)' : 'transparent'; ?>; cursor:pointer; font-size:13px; font-weight:600; color:<?php echo $st_active ? $st_color : 'var(--text-secondary)'; ?>; transition:all 0.2s;">
+                                        <i class="fa-solid <?php echo $st_icon; ?>" style="color:<?php echo $st_color; ?>;"></i> <?php echo $st_label; ?>
+                                    </button>
+                                </form>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+
+                        <!-- Quick Stats & Info Cards -->
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; margin-bottom: 28px;">
+                            <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 24px;">
+                                <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+                                    <div style="width: 44px; height: 44px; background: rgba(5,150,105,0.1); border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 20px; color: #059669;">
+                                        <i class="fa-solid fa-user"></i>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 13px; font-weight: 600; color: var(--text-secondary);">Personal Info</div>
+                                    </div>
+                                </div>
+                                <div style="display: grid; gap: 8px; font-size: 13px;">
+                                    <div><strong>Phone:</strong> <?php echo htmlspecialchars($vol['phone']); ?></div>
+                                    <div><strong>Email:</strong> <?php echo htmlspecialchars($vol['email']); ?></div>
+                                    <div><strong>Address:</strong> <?php echo htmlspecialchars($vol['address'] ?: 'N/A'); ?></div>
+                                    <div><strong>Vehicle:</strong> <?php echo ucfirst($vol['vehicle_type']); ?> <?php echo $vol['vehicle_number'] ? '(' . htmlspecialchars($vol['vehicle_number']) . ')' : ''; ?></div>
+                                    <div><strong>Languages:</strong> <?php echo htmlspecialchars($vol['languages'] ?: 'N/A'); ?></div>
+                                </div>
+                            </div>
+
+                            <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 24px;">
+                                <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+                                    <div style="width: 44px; height: 44px; background: rgba(245,158,11,0.1); border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 20px; color: #f59e0b;">
+                                        <i class="fa-solid fa-clock"></i>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 13px; font-weight: 600; color: var(--text-secondary);">Availability</div>
+                                    </div>
+                                </div>
+                                <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+                                    <?php foreach (explode(',', $vol['availability']) as $a): 
+                                        $labels = ['morning'=>'🌅 Morning', 'afternoon'=>'☀️ Afternoon', 'evening'=>'🌆 Evening', 'weekend'=>'📅 Weekend', 'always'=>'🔄 Always'];
+                                        $label = $labels[trim($a)] ?? ucfirst(trim($a));
+                                    ?>
+                                        <span style="padding: 6px 12px; background: rgba(5,150,105,0.08); border-radius: 8px; font-size: 12px; font-weight: 600; color: #059669;"><?php echo $label; ?></span>
+                                    <?php endforeach; ?>
+                                </div>
+                                <div style="margin-top: 12px; font-size: 13px;">
+                                    <strong>Delivery Radius:</strong> <?php echo $vol['delivery_radius']; ?> km
+                                </div>
+                            </div>
+
+                            <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 24px;">
+                                <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+                                    <div style="width: 44px; height: 44px; background: rgba(139,92,246,0.1); border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 20px; color: #8b5cf6;">
+                                        <i class="fa-solid fa-medal"></i>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 13px; font-weight: 600; color: var(--text-secondary);">Stats & Certificates</div>
+                                    </div>
+                                </div>
+                                <div style="display: grid; gap: 10px;">
+                                    <?php if ($vol['first_aid']): ?>
+                                        <span style="display:flex;align-items:center;gap:6px;font-size:13px;color:#059669;"><i class="fa-solid fa-circle-check"></i> First Aid Certified</span>
+                                    <?php endif; ?>
+                                    <?php if (!empty($vol['medical_training'])): ?>
+                                        <span style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-secondary);"><i class="fa-solid fa-stethoscope"></i> <?php echo htmlspecialchars($vol['medical_training']); ?></span>
+                                    <?php endif; ?>
+                                    <?php if (!empty($vol['previous_experience'])): ?>
+                                        <span style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-secondary);"><i class="fa-solid fa-briefcase"></i> Has prior experience</span>
+                                    <?php endif; ?>
+                                    <span style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-secondary);"><i class="fa-solid fa-trophy"></i> <?php echo (int)$vol['community_points']; ?> Community Points</span>
+                                </div>
+                                <?php if (!empty($vol['certificate_path'])): ?>
+                                    <a href="<?php echo htmlspecialchars($vol['certificate_path']); ?>" target="_blank" class="btn btn-sm btn-outline" style="margin-top:12px;"><i class="fa-solid fa-file-pdf"></i> View Certificate</a>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+
+                        <!-- Recent Activity / Deliveries -->
+                        <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 16px; overflow: hidden;">
+                            <div style="padding: 18px 24px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px;">
+                                <i class="fa-solid fa-clock-rotate-left" style="color: #059669;"></i>
+                                <h3 style="font-size: 16px; font-weight: 700; margin: 0;">Recent Activity</h3>
+                            </div>
+                            <div style="padding: 24px; text-align: center; color: var(--text-muted);">
+                                <i class="fa-solid fa-box-open" style="font-size: 36px; margin-bottom: 12px; display: block;"></i>
+                                <?php
+                $availableDeliveries = get_available_deliveries_for_volunteer($pdo, $user_id);
+                $activeDeliveries = get_volunteer_active_deliveries($pdo, $user_id);
+                $deliveryHistory = get_volunteer_delivery_history($pdo, $user_id, 10);
+                ?>
+                <div style="display:flex;gap:8px;margin-bottom:16px;border-bottom:2px solid var(--border);padding-bottom:0;">
+                    <a href="?page=volunteer&tab=available" class="tab-link <?php echo (!isset($_GET['tab']) || $_GET['tab']==='available')?'active':''; ?>" style="padding:8px 16px;font-size:13px;font-weight:600;border-bottom:3px solid <?php echo (!isset($_GET['tab']) || $_GET['tab']==='available')?'#059669':'transparent'; ?>;color:<?php echo (!isset($_GET['tab']) || $_GET['tab']==='available')?'#059669':'var(--text-muted)'; ?>;text-decoration:none;">
+                        <i class="fa-solid fa-list"></i> Available (<?php echo count($availableDeliveries); ?>)
+                    </a>
+                    <a href="?page=volunteer&tab=active" class="tab-link <?php echo (isset($_GET['tab']) && $_GET['tab']==='active')?'active':''; ?>" style="padding:8px 16px;font-size:13px;font-weight:600;border-bottom:3px solid <?php echo (isset($_GET['tab']) && $_GET['tab']==='active')?'#059669':'transparent'; ?>;color:<?php echo (isset($_GET['tab']) && $_GET['tab']==='active')?'#059669':'var(--text-muted)'; ?>;text-decoration:none;">
+                        <i class="fa-solid fa-truck-fast"></i> Active (<?php echo count($activeDeliveries); ?>)
+                    </a>
+                    <a href="?page=volunteer&tab=history" class="tab-link <?php echo (isset($_GET['tab']) && $_GET['tab']==='history')?'active':''; ?>" style="padding:8px 16px;font-size:13px;font-weight:600;border-bottom:3px solid <?php echo (isset($_GET['tab']) && $_GET['tab']==='history')?'#059669':'transparent'; ?>;color:<?php echo (isset($_GET['tab']) && $_GET['tab']==='history')?'#059669':'var(--text-muted)'; ?>;text-decoration:none;">
+                        <i class="fa-solid fa-clock-rotate-left"></i> History
+                    </a>
+                </div>
+
+                <div class="volunteer-tab-content">
+                    <?php if (!isset($_GET['tab']) || $_GET['tab'] === 'available'): ?>
+                        <h4 style="font-size:14px;font-weight:700;margin:0 0 12px;color:var(--text-secondary);"><i class="fa-solid fa-truck" style="color:#059669;"></i> Available Deliveries Near You</h4>
+                        <?php render_available_deliveries($pdo, $availableDeliveries); ?>
+                    <?php endif; ?>
+                    <?php if (isset($_GET['tab']) && $_GET['tab'] === 'active'): ?>
+                        <h4 style="font-size:14px;font-weight:700;margin:0 0 12px;color:var(--text-secondary);"><i class="fa-solid fa-truck-fast" style="color:#3b82f6;"></i> Active Deliveries</h4>
+                        <?php render_active_deliveries($pdo, $activeDeliveries); ?>
+                    <?php endif; ?>
+                    <?php if (isset($_GET['tab']) && $_GET['tab'] === 'history'): ?>
+                        <h4 style="font-size:14px;font-weight:700;margin:0 0 12px;color:var(--text-secondary);"><i class="fa-solid fa-clock-rotate-left" style="color:#6b7280;"></i> Delivery History</h4>
+                        <?php render_delivery_history($pdo, $deliveryHistory); ?>
+                    <?php endif; ?>
+                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <?php endif;
+
                 } elseif ($page === 'notifications') {
                     $notifications = get_user_notifications($pdo, $user_id);
                     ?>
@@ -2195,7 +2576,7 @@ $flash = get_flash_message();
                                             <div class="rating-prompt-card" style="margin-top:14px;">
                                                 <h4><i class="fa-solid fa-star"></i> Rate the Receiver</h4>
                                                 <p>How was your experience with <strong><?php echo htmlspecialchars($don['approved_consumer_name'] ?: 'the receiver'); ?></strong>?</p>
-                                                <form action="qr-scan.php" method="POST">
+                                                <form action="dashboard.php?page=track-donation" method="POST">
                                                     <input type="hidden" name="action" value="submit_rating">
                                                     <input type="hidden" name="donation_id" value="<?php echo $don['id']; ?>">
                                                     <input type="hidden" name="role" value="receiver">
@@ -2319,15 +2700,44 @@ $flash = get_flash_message();
                                             <?php if ($req['status'] === 'pending'): ?>
                                                 <i class="fa-solid fa-clock" style="color: var(--status-pending);"></i> Request is pending review by the donor: <strong><?php echo htmlspecialchars($req['donor_name']); ?></strong>.
                                             <?php elseif ($req['status'] === 'approved'): ?>
-                                                <i class="fa-solid fa-phone-volume" style="color: var(--primary);"></i> <strong>Approved!</strong> Please coordinate pickup at: <strong><?php echo htmlspecialchars($req['pickup_address']); ?></strong>. Contact: <strong><?php echo htmlspecialchars($req['donor_phone']); ?></strong>.
-                                                <?php if (!empty($req['donor_phone'])): ?>
-                                                    <div style="margin-top: 8px;">
-                                                        <a href="<?php echo get_whatsapp_link($req['donor_phone'], 'Hello ' . $req['donor_name'] . ', I am contacting you regarding the approved food donation pickup on Sayog.'); ?>" target="_blank" class="btn btn-whatsapp btn-whatsapp-sm">
-                                                            <i class="fa-brands fa-whatsapp"></i> Chat on WhatsApp
-                                                        </a>
-                                                    </div>
-                                                <?php endif; ?>
-                                                <?php $qr_token_tr = get_or_create_qr_token($pdo, $req['donation_id']); ?>
+                                                <i class="fa-solid fa-phone-volume" style="color: var(--primary);"></i> <strong>Approved!</strong> Please coordinate pickup at: <strong><?php echo htmlspecialchars($req['pickup_address']); ?></strong>. Contact: <strong><?php echo htmlspecialchars($req['donor_phone']); ?></strong>.            <?php if (!empty($req['donor_phone'])): ?>
+                <div style="margin-top: 8px;">
+                    <a href="<?php echo get_whatsapp_link($req['donor_phone'], 'Hello ' . $req['donor_name'] . ', I am contacting you regarding the approved food donation pickup on Sayog.'); ?>" target="_blank" class="btn btn-whatsapp btn-whatsapp-sm">
+                        <i class="fa-brands fa-whatsapp"></i> Chat on WhatsApp
+                    </a>
+                </div>
+            <?php endif; ?>
+
+            <?php 
+            // ── Delivery Method Selection ──
+            // Show delivery method picker when request is approved but delivery_method not yet selected
+            if (empty(trim($req['delivery_method'] ?? ''))): 
+                render_delivery_method_modal($pdo, $req['id'], $req['donation_id'], $req['food_item']); 
+            elseif ($req['delivery_method'] === 'volunteer'): 
+                // Show volunteer delivery info
+                $vd = get_delivery_by_donation($pdo, $req['donation_id']);
+                if ($vd && $vd['status'] === 'assigned'): ?>
+                    <div style="margin-top:12px;padding:12px 16px;background:#f0fdf4;border:1px solid #a7f3d0;border-radius:12px;">
+                        <span style="color:#059669;font-weight:600;"><i class="fa-solid fa-truck"></i> Volunteer delivery requested</span>
+                        <span style="display:block;margin-top:4px;font-size:12px;color:#4b5563;">A volunteer will be assigned soon to pick up and deliver this donation.</span>
+                    </div>
+                <?php elseif ($vd && in_array($vd['status'], ['accepted','picked_up','in_transit'])): ?>
+                    <div style="margin-top:12px;padding:12px 16px;background:#ecfdf5;border:1px solid #6ee7b7;border-radius:12px;">
+                        <span style="color:#059669;font-weight:600;"><i class="fa-solid fa-truck-fast"></i> Volunteer is on the way!</span>
+                        <span style="display:block;margin-top:4px;font-size:12px;color:#4b5563;">Status: <?php echo ucfirst(str_replace('_',' ',$vd['status'])); ?></span>
+                    </div>
+                <?php elseif ($vd && $vd['status'] === 'delivered'): ?>
+                    <div style="margin-top:12px;padding:12px 16px;background:#f0fdf4;border:1px solid #6ee7b7;border-radius:12px;">
+                        <span style="color:#059669;font-weight:600;"><i class="fa-solid fa-check-circle"></i> Delivery completed by volunteer</span>
+                    </div>
+                <?php endif; ?>
+            <?php elseif ($req['delivery_method'] === 'self_pickup'): ?>
+                <div style="margin-top:12px;padding:12px 16px;background:#f0fdf4;border:1px solid #a7f3d0;border-radius:12px;">
+                    <span style="color:#059669;font-weight:600;"><i class="fa-solid fa-person-walking"></i> Self-pickup selected</span>
+                    <span style="display:block;margin-top:4px;font-size:12px;color:#4b5563;">Please coordinate directly with the donor for pickup using the contact info above.</span>
+                </div>
+            <?php endif; ?>
+            <?php $qr_token_tr = get_or_create_qr_token($pdo, $req['donation_id']); ?>
                                                 <div style="margin-top:12px;padding:12px;background:var(--background);border-radius:8px;text-align:center;width:100%;">
                                                     <div style="font-size:12px;font-weight:700;margin-bottom:4px;color:var(--text-primary);">
                                                         <i class="fa-solid fa-qrcode" style="color:var(--primary);"></i> Your Pickup QR Code
@@ -2342,16 +2752,16 @@ $flash = get_flash_message();
                                                 <i class="fa-solid fa-face-smile" style="color: var(--primary);"></i> Food pickup completed. Thank you for utilizing surplus food!
                                                 <?php
                                                 $rate_don_tr = intval($_GET['rate_donation'] ?? 0);
+                                                $ratings_tr = $pdo->prepare("SELECT * FROM ratings WHERE donation_id = ?");
+                                                $ratings_tr->execute([$req['donation_id']]);
+                                                $rtr = $ratings_tr->fetch();
                                                 if ($rate_don_tr === $req['donation_id']):
-                                                    $ratings_tr = $pdo->prepare("SELECT * FROM ratings WHERE donation_id = ?");
-                                                    $ratings_tr->execute([$req['donation_id']]);
-                                                    $rtr = $ratings_tr->fetch();
                                                     if (!$rtr || empty($rtr['rating_donor'])):
                                                 ?>
                                                 <div class="rating-prompt-card" style="margin-top:12px;">
                                                     <h4><i class="fa-solid fa-star"></i> Rate the Donor</h4>
                                                     <p>How was your experience with <strong><?php echo htmlspecialchars($req['donor_name']); ?></strong>?</p>
-                                                    <form action="qr-scan.php" method="POST">
+                                                    <form action="dashboard.php?page=track-request" method="POST">
                                                         <input type="hidden" name="action" value="submit_rating">
                                                         <input type="hidden" name="donation_id" value="<?php echo $req['donation_id']; ?>">
                                                         <input type="hidden" name="role" value="donor">
@@ -2372,6 +2782,44 @@ $flash = get_flash_message();
                                                 <?php else: ?>
                                                 <div style="margin-top:8px;font-size:12px;color:var(--text-muted);text-align:center;">
                                                     <i class="fa-solid fa-circle-check" style="color:var(--primary);"></i> You rated this donor <?php echo !empty($rtr['rating_donor']) ? render_stars($rtr['rating_donor'], 12) : ''; ?>
+                                                </div>
+                                                <?php endif; endif; ?>
+
+                                                <?php
+                                                // ── Volunteer Rating Prompt (separate from donor rating) ──
+                                                $vol_method = $req['delivery_method'] ?? '';
+                                                if ($vol_method === 'volunteer'):
+                                                    $vol_rated = ($rtr && !empty($rtr['rating_volunteer']));
+                                                    if ($rate_don_tr === $req['donation_id'] && !$vol_rated):
+                                                        // Find volunteer name for this delivery
+                                                        $volNameStmt = $pdo->prepare("SELECT vu.name FROM volunteer_deliveries vd JOIN users vu ON vd.volunteer_user_id = vu.id WHERE vd.donation_id = ? AND vd.volunteer_user_id IS NOT NULL LIMIT 1");
+                                                        $volNameStmt->execute([$req['donation_id']]);
+                                                        $vol_name = $volNameStmt->fetchColumn() ?: 'the volunteer';
+                                                ?>
+                                                <div class="rating-prompt-card" style="margin-top:12px;border-left:3px solid #8b5cf6;">
+                                                    <h4><i class="fa-solid fa-star" style="color:#8b5cf6;"></i> Rate the Volunteer</h4>
+                                                    <p>How was the delivery experience with <strong><?php echo htmlspecialchars($vol_name); ?></strong>?</p>
+                                                    <form action="dashboard.php?page=track-request" method="POST">
+                                                        <input type="hidden" name="action" value="submit_rating">
+                                                        <input type="hidden" name="donation_id" value="<?php echo $req['donation_id']; ?>">
+                                                        <input type="hidden" name="role" value="volunteer">
+                                                        <div class="rating-stars-input">
+                                                            <input type="radio" name="rating" value="5" id="vq5-<?php echo $req['donation_id']; ?>" required><label for="vq5-<?php echo $req['donation_id']; ?>"><i class="fa-solid fa-star"></i></label>
+                                                            <input type="radio" name="rating" value="4" id="vq4-<?php echo $req['donation_id']; ?>"><label for="vq4-<?php echo $req['donation_id']; ?>"><i class="fa-solid fa-star"></i></label>
+                                                            <input type="radio" name="rating" value="3" id="vq3-<?php echo $req['donation_id']; ?>"><label for="vq3-<?php echo $req['donation_id']; ?>"><i class="fa-solid fa-star"></i></label>
+                                                            <input type="radio" name="rating" value="2" id="vq2-<?php echo $req['donation_id']; ?>"><label for="vq2-<?php echo $req['donation_id']; ?>"><i class="fa-solid fa-star"></i></label>
+                                                            <input type="radio" name="rating" value="1" id="vq1-<?php echo $req['donation_id']; ?>"><label for="vq1-<?php echo $req['donation_id']; ?>"><i class="fa-solid fa-star"></i></label>
+                                                        </div>
+                                                        <div class="rating-form-group" style="margin-top:8px;">
+                                                            <label style="font-size:12px;">Review (Optional)</label>
+                                                            <textarea name="review" class="form-control" rows="2" placeholder="How was the volunteer's delivery service?" style="font-size:13px;"></textarea>
+                                                        </div>
+                                                        <button type="submit" class="btn btn-primary" style="margin-top:8px;padding:8px 16px;font-size:13px;background:linear-gradient(135deg,#8b5cf6,#7c3aed);"><i class="fa-solid fa-paper-plane"></i> Submit Rating</button>
+                                                    </form>
+                                                </div>
+                                                <?php elseif ($vol_rated): ?>
+                                                <div style="margin-top:8px;font-size:12px;color:var(--text-muted);text-align:center;">
+                                                    <i class="fa-solid fa-circle-check" style="color:#8b5cf6;"></i> You rated the volunteer <?php echo !empty($rtr['rating_volunteer']) ? render_stars($rtr['rating_volunteer'], 12) : ''; ?>
                                                 </div>
                                                 <?php endif; endif; ?>
                                             <?php endif; ?>

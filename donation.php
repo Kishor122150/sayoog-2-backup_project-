@@ -10,107 +10,12 @@ if (!$donation) {
 
 $redirect = 'donation.php?id=' . $donation_id;
 ?>
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title><?php echo $donation ? htmlspecialchars($donation['food_item']) : 'Donation Not Found'; ?> | Sayog</title>
-    <link rel="stylesheet" href="style.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <script src="js/app.js"></script>
-    
+<?php
+$page_title = 'Sayog | Food Donation Details';
+$active_page = 'donations';
+require_once 'header.php';
+?>
     <style>
-      /* ===== MOBILE NAVIGATION — Hamburger Menu ===== */
-      .mobile-nav-toggle {
-        display: none;
-        background: none;
-        border: none;
-        font-size: 24px;
-        color: var(--text-primary, #0f172a);
-        cursor: pointer;
-        padding: 8px;
-        line-height: 1;
-        z-index: 1100;
-        position: relative;
-        transition: color 0.3s ease;
-      }
-      .mobile-nav-toggle:hover {
-        color: var(--primary-color, #4f46e5);
-      }
-
-      .mobile-nav-overlay {
-        display: none;
-        position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background: rgba(0, 0, 0, 0.45);
-        backdrop-filter: blur(4px);
-        -webkit-backdrop-filter: blur(4px);
-        z-index: 1050;
-        opacity: 0;
-        pointer-events: none;
-        transition: opacity 0.3s ease;
-      }
-      .mobile-nav-overlay.mobile-nav-open {
-        opacity: 1;
-        pointer-events: auto;
-      }
-
-      @media (max-width: 767px) {
-        .site-nav {
-          position: fixed;
-          top: 0;
-          left: 0;
-          bottom: 0;
-          width: 280px;
-          max-width: 85vw;
-          background: #ffffff;
-          box-shadow: 0 0 40px rgba(0, 0, 0, 0.15);
-          flex-direction: column;
-          align-items: stretch;
-          justify-content: flex-start;
-          padding: 80px 20px 24px;
-          gap: 4px;
-          z-index: 1090;
-          transform: translateX(-100%);
-          transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
-          overflow-y: auto;
-          display: flex !important;
-          flex-wrap: nowrap;
-        }
-        .site-nav.mobile-nav-open {
-          transform: translateX(0);
-        }
-        .site-nav a {
-          padding: 12px 16px;
-          font-size: 15px;
-          border-radius: 10px;
-          width: 100%;
-          justify-content: center;
-          margin-left: 0;
-        }
-        .site-nav a[style*="background: #059669"] {
-          padding: 12px 16px;
-          font-size: 15px;
-          width: 100%;
-          justify-content: center;
-        }
-        .mobile-nav-toggle {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-        }
-        .mobile-nav-overlay {
-          display: block;
-        }
-        .mobile-nav-overlay.mobile-nav-open {
-          display: block;
-        }
-      }
-
         :root {
             --primary-color: #4f46e5;
             --primary-hover: #4338ca;
@@ -122,335 +27,40 @@ $redirect = 'donation.php?id=' . $donation_id;
             --radius-sm: 8px;
             --transition: all 0.3s ease;
         }
-
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: var(--bg-light);
-            color: var(--text-dark);
-            margin: 0;
-            padding: 0;
-            line-height: 1.6;
-        }
-
-        /* Clean Header Fixes */
-        .site-header {
-            background: #ffffff;
-            border-bottom: 1px solid var(--border-color);
-            padding: 1rem 5%;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            position: sticky;
-            top: 0;
-            z-index: 1000;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.02);
-        }
-        .site-branding .site-logo {
-            font-size: 1.5rem;
-            font-weight: 700;
-            color: var(--primary-color);
-            text-decoration: none;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .site-nav a {
-            color: var(--text-light);
-            text-decoration: none;
-            margin-left: 20px;
-            font-weight: 500;
-            transition: var(--transition);
-        }
-        .site-nav a:hover {
-            color: var(--primary-color);
-        }
-
-        /* Container & Layout */
-        .site-main {
-            max-width: 1100px;
-            margin: 40px auto;
-            padding: 0 20px;
-            min-height: calc(100vh - 230px);
-        }
-
-        .section-block {
-            background: #ffffff;
-            border-radius: var(--radius-md);
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
-            overflow: hidden;
-            border: 1px solid rgba(0, 0, 0, 0.03);
-        }
-
-        /* Split Screen Grid Layout */
-        .detail-card-grid {
-            display: grid;
-            grid-template-columns: 1fr;
-        }
-        @media(min-width: 768px) {
-            .detail-card-grid {
-                grid-template-columns: 45% 55%;
-            }
-        }
-
-        /* Food Media Component */
-        .detail-card-image {
-            position: relative;
-            background: #f3f4f6;
-            min-height: 320px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            overflow: hidden;
-        }
-        .detail-card-image img {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-            position: absolute;
-            top: 0;
-            left: 0;
-            transition: var(--transition);
-        }
-        .detail-card-image:hover img {
-            transform: scale(1.02);
-        }
-        .product-placeholder {
-            font-size: 4rem;
-            color: #9ca3af;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 15px;
-        }
-
-        /* Details Section */
-        .detail-card-body {
-            padding: 40px;
-            display: flex;
-            flex-direction: column;
-        }
-        .detail-card-body h1 {
-            font-size: 2.25rem;
-            font-weight: 700;
-            margin-top: 0;
-            margin-bottom: 15px;
-            color: #111827;
-            letter-spacing: -0.025em;
-        }
-        .description-text {
-            color: var(--text-light);
-            font-size: 1.05rem;
-            margin-bottom: 30px;
-            line-height: 1.7;
-        }
-
-        /* Information Grid Cards */
-        .info-cards-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-            gap: 16px;
-            margin-bottom: 35px;
-        }
-        .info-card {
-            background: #fafafa;
-            border: 1px solid var(--border-color);
-            padding: 16px;
-            border-radius: var(--radius-sm);
-            display: flex;
-            align-items: flex-start;
-            gap: 12px;
-        }
-        .info-card i {
-            color: var(--primary-color);
-            font-size: 1.2rem;
-            margin-top: 3px;
-            width: 20px;
-            text-align: center;
-        }
-        .info-card-content strong {
-            display: block;
-            font-size: 0.85rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: #6b7280;
-            margin-bottom: 4px;
-        }
-        .info-card-content span {
-            font-size: 0.95rem;
-            font-weight: 600;
-            color: var(--text-dark);
-        }
-
-        /* Custom Adaptive Status Badges */
-        .status-badge {
-            display: inline-flex;
-            align-items: center;
-            padding: 4px 12px;
-            border-radius: 50px;
-            font-size: 0.85rem;
-            font-weight: 600;
-        }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: var(--bg-light); color: var(--text-dark); margin: 0; padding: 0; line-height: 1.6; }
+        .site-main { max-width: 1100px; margin: 20px auto; padding: 0 20px; min-height: calc(100vh - 140px); display: flex; flex-direction: column; }
+        .section-block { background: #ffffff; border-radius: var(--radius-md); box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05); overflow: hidden; border: 1px solid rgba(0, 0, 0, 0.03); flex: 1; display: flex; flex-direction: column; }
+        .detail-card-grid { display: grid; grid-template-columns: 1fr; flex: 1; }
+        .detail-card { display: flex; flex-direction: column; flex: 1; max-height: calc(100vh - 140px); }
+        @media(min-width: 768px) { .detail-card-grid { grid-template-columns: 45% 55%; max-height: calc(100vh - 140px); } }
+        .detail-card-image { position: relative; background: #f3f4f6; height: calc(100vh - 140px); min-height: 300px; max-height: 500px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+        @media(max-width: 767px) { .detail-card-image { height: 280px; min-height: 200px; max-height: 280px; } }
+        .detail-card-image img { width: 100%; height: 100%; object-fit: cover; position: absolute; top: 0; left: 0; transition: var(--transition); }
+        .product-placeholder { font-size: 4rem; color: #9ca3af; display: flex; flex-direction: column; align-items: center; gap: 15px; }
+        .detail-card-body { padding: 24px 32px; display: flex; flex-direction: column; overflow-y: auto; max-height: calc(100vh - 140px); scrollbar-width: thin; scrollbar-color: #d1d5db transparent; }
+        .detail-card-body h1 { font-size: 1.6rem; font-weight: 700; margin-top: 0; margin-bottom: 8px; color: #111827; }
+        .description-text { color: var(--text-light); font-size: 0.95rem; margin-bottom: 16px; line-height: 1.5; }
+        .info-cards-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-bottom: 16px; }
+        .info-card { background: #fafafa; border: 1px solid var(--border-color); padding: 10px 12px; border-radius: var(--radius-sm); display: flex; align-items: flex-start; gap: 8px; }
+        .status-badge { display: inline-flex; align-items: center; padding: 4px 12px; border-radius: 50px; font-size: 0.85rem; font-weight: 600; }
         .status-available { background-color: #d1fae5; color: #065f46; }
         .status-pending { background-color: #fef3c7; color: #92400e; }
         .status-claimed { background-color: #e0e7ff; color: #3730a3; }
         .status-expired { background-color: #fee2e2; color: #991b1b; }
-
-        /* Unified Form Styling Elements */
-        .request-form-section {
-            background: #f8fafc;
-            border: 1px solid #e2e8f0;
-            border-radius: var(--radius-sm);
-            padding: 25px;
-            margin-top: 10px;
-        }
-        .request-form-section h2 {
-            font-size: 1.35rem;
-            margin-top: 0;
-            margin-bottom: 20px;
-            color: var(--text-dark);
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .form-group {
-            margin-bottom: 20px;
-        }
-        .form-label {
-            display: block;
-            font-weight: 600;
-            font-size: 0.9rem;
-            margin-bottom: 8px;
-            color: var(--text-dark);
-        }
-        .form-control {
-            width: 100%;
-            padding: 12px 14px;
-            border: 1px solid #cbd5e1;
-            border-radius: var(--radius-sm);
-            font-size: 0.95rem;
-            background-color: #ffffff;
-            box-sizing: border-box;
-            transition: var(--transition);
-        }
-        .form-control:focus {
-            outline: none;
-            border-color: var(--primary-color);
-            box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.1);
-        }
-
-        /* Buttons & Dynamic Alerts */
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-            padding: 12px 24px;
-            font-size: 0.95rem;
-            font-weight: 600;
-            border-radius: var(--radius-sm);
-            cursor: pointer;
-            transition: var(--transition);
-            text-decoration: none;
-            border: none;
-            width: 100%;
-            box-sizing: border-box;
-        }
-        .btn-primary {
-            background: var(--primary-color);
-            color: #ffffff;
-        }
-        .btn-primary:hover {
-            background: var(--primary-hover);
-        }
-        .btn-outline {
-            background: transparent;
-            border: 2px solid var(--primary-color);
-            color: var(--primary-color);
-        }
-        .btn-outline:hover {
-            background: var(--primary-color);
-            color: #ffffff;
-        }
-        .btn-whatsapp {
-            margin-top: 12px;
-        }
-
-        .alert {
-            padding: 16px;
-            border-radius: var(--radius-sm);
-            font-size: 0.95rem;
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-            border-left: 4px solid transparent;
-        }
-        .alert p { margin: 0; font-weight: 500; }
-        .alert-info {
-            background-color: #eff6ff;
-            color: #1e40af;
-            border-left-color: #3b82f6;
-        }
-        .alert-warning {
-            background-color: #fffbeb;
-            color: #92400e;
-            border-left-color: #f59e0b;
-        }
-
-        /* Empty Fallback State */
-        .empty-state {
-            padding: 60px 20px;
-            text-align: center;
-            max-width: 500px;
-            margin: 0 auto;
-        }
-        .empty-state i {
-            font-size: 3.5rem;
-            color: #ef4444;
-            margin-bottom: 20px;
-        }
-        .empty-state h3 {
-            font-size: 1.5rem;
-            margin-bottom: 10px;
-        }
-        .empty-state p {
-            color: var(--text-light);
-            margin-bottom: 25px;
-        }
-
-        /* Clean Footer styling */
-        .site-footer {
-            background: #ffffff;
-            border-top: 1px solid var(--border-color);
-            text-align: center;
-            padding: 20px;
-            color: var(--text-light);
-            font-size: 0.9rem;
-            margin-top: 60px;
-        }
+        .request-form-section { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: var(--radius-sm); padding: 14px 16px; margin-top: 8px; }
+        .form-group { margin-bottom: 12px; }
+        .form-label { display: block; font-weight: 600; font-size: 0.82rem; margin-bottom: 5px; color: var(--text-dark); }
+        .form-control { width: 100%; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: var(--radius-sm); font-size: 0.85rem; background-color: #ffffff; box-sizing: border-box; transition: var(--transition); }
+        .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 18px; font-size: 0.85rem; font-weight: 600; border-radius: var(--radius-sm); cursor: pointer; transition: var(--transition); text-decoration: none; border: none; width: 100%; box-sizing: border-box; }
+        .btn-primary { background: var(--primary-color); color: #ffffff; }
+        .btn-outline { background: transparent; border: 2px solid var(--primary-color); color: var(--primary-color); }
+        .alert { padding: 16px; border-radius: var(--radius-sm); font-size: 0.95rem; display: flex; flex-direction: column; gap: 12px; border-left: 4px solid transparent; }
+        .alert-info { background-color: #eff6ff; color: #1e40af; border-left-color: #3b82f6; }
+        .alert-warning { background-color: #fffbeb; color: #92400e; border-left-color: #f59e0b; }
+        .empty-state { padding: 60px 20px; text-align: center; max-width: 500px; margin: 0 auto; }
+        .site-footer { background: #ffffff; border-top: 1px solid var(--border-color); text-align: center; padding: 20px; color: var(--text-light); font-size: 0.9rem; margin-top: 60px; }
     </style>
-</head>
-<body>
-    <!-- Mobile Nav Overlay -->
-    <div class="mobile-nav-overlay" id="mobileNavOverlay"></div>
 
-    <header class="site-header">
-        <button class="mobile-nav-toggle" id="mobileNavToggle" aria-label="Toggle navigation menu">
-            <i class="fa-solid fa-bars"></i>
-        </button>
-        <div class="site-branding">
-            <a href="index.php" class="site-logo"><i class="fa-solid fa-hand-holding-heart"></i> Sayog</a>
-        </div>
-       <nav class="site-nav" id="mobileNav">
-            <a href="index.php">Home</a>
-            <a href="donations.php" class="active" style="color: #059669;">Food Listings</a>
-            <a href="about.php">About</a>
-            <a href="contact.php">Contact</a>
-            <a href="login.php">Login</a>
-            <!-- <a href="register.php">Get Started</a> -->
-            <a href="register.php" style="background: #059669; color:#fff">Get Started</a>
-
-        </nav>
-    </header>
 
     <main class="site-main">
         <?php if (!$donation): ?>
@@ -540,29 +150,29 @@ $redirect = 'donation.php?id=' . $donation_id;
                                 </div>
                             </div>
 
-                            <!-- QR Code Verification -->
-                            <div class="qr-section">
-                                <h4><i class="fa-solid fa-qrcode"></i> QR Pickup Verification</h4>
-                                <p>Show this QR code to the donor at pickup to verify your identity.</p>
+                            <!-- QR Code Verification - Compact -->
+                            <div class="qr-section" style="margin-top:12px;padding:12px;">
+                                <h4 style="font-size:13px;margin-bottom:2px;"><i class="fa-solid fa-qrcode"></i> QR Pickup Verification</h4>
+                                <p style="font-size:11px;margin-bottom:8px;">Show this QR code to the donor at pickup.</p>
                                 <?php
                                 $qr_token = get_or_create_qr_token($pdo, $donation['id']);
-                                $qr_img = get_qr_image_url($qr_token, 200);
+                                $qr_img = get_qr_image_url($qr_token, 160);
                                 ?>
-                                <img src="<?php echo htmlspecialchars($qr_img); ?>" alt="QR Code" class="qr-code-img" id="donationQRCode">
-                                <span class="qr-token-text">Token: <?php echo htmlspecialchars($qr_token); ?></span>
-                                <a href="qr-scan.php?token=<?php echo urlencode($qr_token); ?>" target="_blank" class="qr-verify-link">
-                                    <i class="fa-solid fa-external-link-alt"></i> Open Verification Page
+                                <img src="<?php echo htmlspecialchars($qr_img); ?>" alt="QR Code" class="qr-code-img" id="donationQRCode" style="width:100px;height:100px;">
+                                <span class="qr-token-text" style="font-size:9px;">Token: <?php echo htmlspecialchars($qr_token); ?></span>
+                                <a href="qr-scan.php?token=<?php echo urlencode($qr_token); ?>" target="_blank" class="qr-verify-link" style="font-size:11px;padding:5px 12px;">
+                                    <i class="fa-solid fa-external-link-alt"></i> Verify
                                 </a>
                             </div>
 
-                            <!-- Location Map -->
-                            <div style="margin-top:24px;">
-                                <h3 style="font-size:1.1rem;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:8px;">
+                            <!-- Location Map - Compact -->
+                            <div style="margin-top:12px;">
+                                <h4 style="font-size:13px;font-weight:700;margin-bottom:6px;display:flex;align-items:center;gap:6px;">
                                     <i class="fa-solid fa-map-location-dot" style="color:#059669;"></i> Pickup Location
-                                </h3>
-                                <div class="map-container-single" id="singleDonationMap"></div>
-                                <div style="margin-top:10px;">
-                                    <a href="https://www.google.com/maps/dir/?api=1&destination=<?php echo urlencode($donation['pickup_address']); ?>" target="_blank" class="btn btn-outline" style="background:rgba(59,130,246,0.08);color:#3b82f6;border-color:rgba(59,130,246,0.2);width:auto;display:inline-flex;">
+                                </h4>
+                                <div class="map-container-single" id="singleDonationMap" style="height:150px;"></div>
+                                <div style="margin-top:6px;">
+                                    <a href="https://www.google.com/maps/dir/?api=1&destination=<?php echo urlencode($donation['pickup_address']); ?>" target="_blank" class="btn btn-outline" style="background:rgba(59,130,246,0.08);color:#3b82f6;border-color:rgba(59,130,246,0.2);width:auto;display:inline-flex;padding:5px 12px;font-size:12px;">
                                         <i class="fa-solid fa-map-pin"></i> Open in Google Maps
                                     </a>
                                 </div>
@@ -628,60 +238,4 @@ $redirect = 'donation.php?id=' . $donation_id;
     </script>
     <?php endif; ?>
 
-    <footer class="site-footer">
-        <p>&copy; <?php echo date('Y'); ?> Sayog. Connecting surplus food with communities.</p>
-    </footer>
-
-  <script>
-    (function() {
-      var toggle = document.getElementById('mobileNavToggle');
-      var nav = document.getElementById('mobileNav');
-      var overlay = document.getElementById('mobileNavOverlay');
-      var icon = toggle ? toggle.querySelector('i') : null;
-
-      if (!toggle || !nav || !overlay) return;
-
-      function openMenu() {
-        nav.classList.add('mobile-nav-open');
-        overlay.classList.add('mobile-nav-open');
-        if (icon) {
-          icon.className = 'fa-solid fa-xmark';
-        }
-        toggle.setAttribute('aria-label', 'Close navigation menu');
-        document.body.style.overflow = 'hidden';
-      }
-
-      function closeMenu() {
-        nav.classList.remove('mobile-nav-open');
-        overlay.classList.remove('mobile-nav-open');
-        if (icon) {
-          icon.className = 'fa-solid fa-bars';
-        }
-        toggle.setAttribute('aria-label', 'Toggle navigation menu');
-        document.body.style.overflow = '';
-      }
-
-      toggle.addEventListener('click', function(e) {
-        e.stopPropagation();
-        if (nav.classList.contains('mobile-nav-open')) {
-          closeMenu();
-        } else {
-          openMenu();
-        }
-      });
-
-      overlay.addEventListener('click', closeMenu);
-
-      nav.querySelectorAll('a').forEach(function(link) {
-        link.addEventListener('click', closeMenu);
-      });
-
-      document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape' && nav.classList.contains('mobile-nav-open')) {
-          closeMenu();
-        }
-      });
-    })();
-  </script>
-</body>
-</html>
+    <?php require_once 'footer.php'; ?>

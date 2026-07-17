@@ -2087,3 +2087,34 @@ select.form-control {
   .modern-table tbody tr td:last-child {
     padding-bottom: 0;
   }
+
+
+/* ============================================================
+   VOLUNTEER MANAGEMENT STYLES
+   ============================================================ */
+.detail-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+.detail-table tr {
+    border-bottom: 1px solid var(--admin-border);
+}
+.detail-table td {
+    padding: 8px 12px;
+    vertical-align: top;
+}
+.detail-table td:first-child {
+    font-weight: 600;
+    color: var(--admin-text-muted);
+    white-space: nowrap;
+    width: 140px;
+}
+.btn-warning {
+    background: linear-gradient(135deg, #f59e0b, #d97706);
+    color: #fff;
+}
+.btn-warning:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3);
+}
