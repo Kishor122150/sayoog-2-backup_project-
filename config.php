@@ -240,7 +240,7 @@ try {
         $pdo->exec("INSERT INTO cms_homepage (id, hero_heading, hero_subheading, hero_button1_text, hero_button1_link, hero_button2_text, hero_button2_link, main_heading, main_description, works_title, works_description, work1_icon, work1_heading, work1_description, work2_icon, work2_heading, work2_description, work3_icon, work3_heading, work3_description, work4_icon, work4_heading, work4_description, quick_title, quick_description, quick1_icon, quick1_title, quick1_description, quick1_button, quick1_link, quick2_icon, quick2_title, quick2_description, quick2_button, quick2_link, quick3_icon, quick3_title, quick3_description, quick3_button, quick3_link, quick4_icon, quick4_title, quick4_description, quick4_button, quick4_link, footer_description, footer_address, footer_phone, footer_email, facebook, instagram, whatsapp, linkedin, copyright) VALUES (1,
             'Welcome to Sayog',
             'Share surplus food, browse donation opportunities, and support local communities.',
-            'Browse Food Listings', 'donations.php',
+            'Browse Food Listings', '/frontend/donations.php',
             'Member Login', 'login.php',
             'How It Works', 'Sayog connects people with surplus food to those who need it through a simple, secure, and transparent donation process.',
             'How Sayog Works', 'Sayog connects people with surplus food to those who need it through a simple, secure, and transparent donation process.',
@@ -251,8 +251,8 @@ try {
             'Quick Actions', 'Start helping your community today.',
             'fas fa-user-plus', 'Join Sayog', 'Create your free account.', 'Get Started', 'register.php',
             'fas fa-right-to-bracket', 'Login', 'Access your dashboard.', 'Login', 'login.php',
-            'fas fa-bowl-food', 'Browse Donations', 'Find available food near you.', 'View Listings', 'donations.php',
-            'fas fa-envelope', 'Contact Us', 'Need help? Reach out anytime.', 'Contact', 'contact.php',
+            'fas fa-bowl-food', 'Browse Donations', 'Find available food near you.', 'View Listings', '/frontend/donations.php',
+            'fas fa-envelope', 'Contact Us', 'Need help? Reach out anytime.', 'Contact', '/frontend/contact.php',
             'Built to connect surplus food with communities.',
             'Kathmandu, Nepal',
             '+977-1-4XXXXXX',
@@ -591,6 +591,141 @@ try {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     ");
 
+    // ─── VOLUNTEER LOCATIONS TABLE (GPS Tracking) ───
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `volunteer_locations` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `volunteer_user_id` INT NOT NULL,
+            `delivery_id` INT DEFAULT NULL,
+            `latitude` DECIMAL(10,7) NOT NULL,
+            `longitude` DECIMAL(10,7) NOT NULL,
+            `accuracy` DECIMAL(10,2) DEFAULT NULL,
+            `heading` DECIMAL(5,2) DEFAULT NULL,
+            `speed` DECIMAL(5,2) DEFAULT NULL,
+            `is_sharing` TINYINT(1) NOT NULL DEFAULT 0,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (`volunteer_user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
+            FOREIGN KEY (`delivery_id`) REFERENCES `volunteer_deliveries`(`id`) ON DELETE CASCADE,
+            INDEX `idx_location_volunteer` (`volunteer_user_id`),
+            INDEX `idx_location_delivery` (`delivery_id`),
+            INDEX `idx_location_time` (`created_at`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    ");
+
+    // Add tracking_sharing column to volunteers table
+    $colCheckTrack = $pdo->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'volunteers' AND COLUMN_NAME = ?");
+    $colCheckTrack->execute(['tracking_enabled']);
+    if (!$colCheckTrack->fetchColumn()) {
+        $pdo->exec("ALTER TABLE volunteers ADD COLUMN tracking_enabled TINYINT(1) NOT NULL DEFAULT 0 AFTER online_status");
+    }
+
+    // Add assignment_method column to volunteer_deliveries to track auto vs manual assignment
+    $colCheckAssign = $pdo->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'volunteer_deliveries' AND COLUMN_NAME = ?");
+    $colCheckAssign->execute(['assignment_method']);
+    if (!$colCheckAssign->fetchColumn()) {
+        $pdo->exec("ALTER TABLE volunteer_deliveries ADD COLUMN assignment_method ENUM('auto','manual_accept','admin_assign','reassigned') DEFAULT NULL AFTER status");
+    }
+
+    // ─── MESSAGING TABLE ───
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `messages` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `donation_id` INT NOT NULL,
+            `sender_id` INT NOT NULL,
+            `receiver_id` INT NOT NULL,
+            `message` TEXT NOT NULL,
+            `is_read` TINYINT(1) NOT NULL DEFAULT 0,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (`donation_id`) REFERENCES `donations`(`id`) ON DELETE CASCADE,
+            FOREIGN KEY (`sender_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
+            FOREIGN KEY (`receiver_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
+            INDEX `idx_msg_donation` (`donation_id`),
+            INDEX `idx_msg_users` (`sender_id`, `receiver_id`),
+            INDEX `idx_msg_read` (`is_read`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    ");
+
+    // ─── REFERRALS TABLE ───
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `referrals` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `referrer_id` INT NOT NULL,
+            `referred_email` VARCHAR(100) NOT NULL,
+            `referred_id` INT DEFAULT NULL,
+            `status` ENUM('pending','joined','completed') NOT NULL DEFAULT 'pending',
+            `completed_donation_id` INT DEFAULT NULL,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            `completed_at` DATETIME DEFAULT NULL,
+            FOREIGN KEY (`referrer_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
+            INDEX `idx_referrer` (`referrer_id`),
+            INDEX `idx_status` (`status`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    ");
+
+    // Add referral_code column to users
+    $colCheckRef = $pdo->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = ?");
+    $colCheckRef->execute(['referral_code']);
+    if (!$colCheckRef->fetchColumn()) {
+        $pdo->exec("ALTER TABLE users ADD COLUMN referral_code VARCHAR(20) DEFAULT NULL UNIQUE AFTER profile_photo");
+        $pdo->exec("CREATE INDEX idx_referral_code ON users(referral_code)");
+    }
+
+    // ─── FOOD DRIVES / EVENTS TABLE ───
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `food_drives` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `organizer_id` INT NOT NULL,
+            `title` VARCHAR(200) NOT NULL,
+            `description` TEXT,
+            `location` VARCHAR(255) NOT NULL,
+            `event_date` DATETIME NOT NULL,
+            `end_date` DATETIME DEFAULT NULL,
+            `target_meals` INT DEFAULT 0,
+            `collected_meals` INT NOT NULL DEFAULT 0,
+            `image_path` VARCHAR(255) DEFAULT NULL,
+            `status` ENUM('upcoming','active','completed','cancelled') NOT NULL DEFAULT 'upcoming',
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            FOREIGN KEY (`organizer_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
+            INDEX `idx_drive_status` (`status`),
+            INDEX `idx_drive_date` (`event_date`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    ");
+
+    // ─── FOOD DRIVE REGISTRATIONS ───
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `food_drive_registrations` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `drive_id` INT NOT NULL,
+            `user_id` INT NOT NULL,
+            `role` ENUM('volunteer','donor','participant') NOT NULL DEFAULT 'participant',
+            `status` ENUM('registered','attended','cancelled') NOT NULL DEFAULT 'registered',
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (`drive_id`) REFERENCES `food_drives`(`id`) ON DELETE CASCADE,
+            FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
+            UNIQUE KEY `unique_registration` (`drive_id`, `user_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    ");
+
+    // Add dietary_type column to donations
+    $colCheckDiet = $pdo->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'donations' AND COLUMN_NAME = ?");
+    $colCheckDiet->execute(['dietary_type']);
+    if (!$colCheckDiet->fetchColumn()) {
+        $pdo->exec("ALTER TABLE donations ADD COLUMN dietary_type ENUM('all','vegetarian','vegan','non_veg','jain') NOT NULL DEFAULT 'all' AFTER description");
+    }
+    // Add food_category column
+    $colCheckDiet->execute(['food_category']);
+    if (!$colCheckDiet->fetchColumn()) {
+        $pdo->exec("ALTER TABLE donations ADD COLUMN food_category ENUM('cooked','packaged','fresh_produce','dairy','bakery','dry_goods','beverages') DEFAULT NULL AFTER dietary_type");
+    }
+
+    // ─── USER IMPACT STATS ───
+    $colCheckImpact = $pdo->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = ?");
+    $colCheckImpact->execute(['impact_points']);
+    if (!$colCheckImpact->fetchColumn()) {
+        $pdo->exec("ALTER TABLE users ADD COLUMN impact_points INT NOT NULL DEFAULT 0 AFTER referral_code");
+    }
+
     // ─── CHATBOT TABLES ───
     $pdo->exec("
         CREATE TABLE IF NOT EXISTS `chatbot_knowledge` (
@@ -667,6 +802,21 @@ try {
  */
 function sanitize($data) {
     return htmlspecialchars(trim($data), ENT_QUOTES, 'UTF-8');
+}
+
+/**
+ * Ensure an asset URL is absolute from the web root.
+ * Handles paths stored as relative (e.g., 'uploads/team/photo.png')
+ * so they work correctly from any subdirectory like /frontend/.
+ */
+function asset_url($path) {
+    if (empty($path)) return '';
+    // Already absolute URL (http://, https://, //)
+    if (preg_match('/^(https?:)?\/\//', $path)) return $path;
+    // Already starts with /
+    if (isset($path[0]) && $path[0] === '/') return $path;
+    // Make relative path root-absolute
+    return '/' . $path;
 }
 
 /**
@@ -1175,6 +1325,151 @@ function whatsapp_button($phone, $label = 'Chat via WhatsApp', $message = '') {
 
 
 /**
+ * Send a message between donor and receiver for a donation.
+ */
+function send_message($pdo, $donation_id, $sender_id, $receiver_id, $message) {
+    $stmt = $pdo->prepare("INSERT INTO messages (donation_id, sender_id, receiver_id, message) VALUES (?, ?, ?, ?)");
+    $stmt->execute([$donation_id, $sender_id, $receiver_id, $message]);
+    create_notification($pdo, $receiver_id, 'new_message', 'You have a new message regarding a donation.', 'dashboard.php?page=messages&donation_id=' . $donation_id);
+    return $pdo->lastInsertId();
+}
+
+/**
+ * Get messages for a donation conversation.
+ */
+function get_messages($pdo, $donation_id, $user_id) {
+    $stmt = $pdo->prepare("
+        SELECT m.*, u.name AS sender_name 
+        FROM messages m 
+        JOIN users u ON m.sender_id = u.id 
+        WHERE m.donation_id = ? AND (m.sender_id = ? OR m.receiver_id = ?)
+        ORDER BY m.created_at ASC
+    ");
+    $stmt->execute([$donation_id, $user_id, $user_id]);
+    return $stmt->fetchAll();
+}
+
+/**
+ * Get unread message count for a user.
+ */
+function get_unread_message_count($pdo, $user_id) {
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM messages WHERE receiver_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+    return (int)$stmt->fetchColumn();
+}
+
+/**
+ * Mark messages as read for a donation.
+ */
+function mark_messages_read($pdo, $donation_id, $user_id) {
+    $stmt = $pdo->prepare("UPDATE messages SET is_read = 1 WHERE donation_id = ? AND receiver_id = ? AND is_read = 0");
+    $stmt->execute([$donation_id, $user_id]);
+}
+
+/**
+ * Generate a unique referral code for a user.
+ */
+function generate_referral_code($pdo, $user_id) {
+    $code = strtoupper(substr(md5($user_id . time()), 0, 8));
+    $stmt = $pdo->prepare("UPDATE users SET referral_code = ? WHERE id = ? AND referral_code IS NULL");
+    $stmt->execute([$code, $user_id]);
+    if ($stmt->rowCount() === 0) {
+        $stmt = $pdo->prepare("SELECT referral_code FROM users WHERE id = ?");
+        $stmt->execute([$user_id]);
+        $code = $stmt->fetchColumn();
+    }
+    return $code;
+}
+
+/**
+ * Get referral stats for a user.
+ */
+function get_referral_stats($pdo, $user_id) {
+    $stmt = $pdo->prepare("SELECT COUNT(*) as total, SUM(CASE WHEN status = 'joined' THEN 1 ELSE 0 END) as joined, SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed FROM referrals WHERE referrer_id = ?");
+    $stmt->execute([$user_id]);
+    return $stmt->fetch();
+}
+
+/**
+ * Calculate impact metrics for a user.
+ */
+function get_user_impact($pdo, $user_id) {
+    $donations = $pdo->prepare("SELECT COUNT(*) as total, COALESCE(SUM(CAST(quantity AS UNSIGNED)), 0) as total_qty FROM donations WHERE donor_id = ? AND status = 'completed'");
+    $donations->execute([$user_id]);
+    $d = $donations->fetch();
+    
+    $requests = $pdo->prepare("SELECT COUNT(*) FROM requests WHERE consumer_id = ? AND status = 'completed'");
+    $requests->execute([$user_id]);
+    $r = (int)$requests->fetchColumn();
+    
+    $qty = (int)$d['total_qty'];
+    if ($qty <= 0) $qty = (int)$d['total'] * 3; // estimate ~3 servings per donation
+    
+    $meals = $qty;
+    $co2_saved = round($meals * 2.5, 1); // kg CO2 equivalent per meal saved
+    $water_saved = round($meals * 500, 1); // liters of water per meal
+    
+    return [
+        'donations_completed' => (int)$d['total'],
+        'requests_completed' => $r,
+        'meals_provided' => $meals,
+        'co2_saved_kg' => $co2_saved,
+        'water_saved_liters' => $water_saved,
+        'total_actions' => (int)$d['total'] + $r,
+    ];
+}
+
+/**
+ * Get food safety score for a donor (A/B/C/D based on ratings, cancellations, response rate).
+ */
+function get_food_safety_score($pdo, $user_id) {
+    $ratings = get_user_rating($pdo, $user_id);
+    $avg = $ratings['average'];
+    
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM donations WHERE donor_id = ? AND status = 'cancelled'");
+    $stmt->execute([$user_id]);
+    $cancellations = (int)$stmt->fetchColumn();
+    
+    $stmt2 = $pdo->prepare("SELECT COUNT(*) FROM donations WHERE donor_id = ?");
+    $stmt2->execute([$user_id]);
+    $total_donations = (int)$stmt2->fetchColumn();
+    
+    $cancel_rate = $total_donations > 0 ? ($cancellations / $total_donations) * 100 : 0;
+    
+    if ($avg >= 4.5 && $cancel_rate < 10) return ['grade' => 'A', 'label' => 'Excellent', 'color' => '#16a34a'];
+    if ($avg >= 3.5 && $cancel_rate < 20) return ['grade' => 'B', 'label' => 'Good', 'color' => '#2563eb'];
+    if ($avg >= 2.5 && $cancel_rate < 35) return ['grade' => 'C', 'label' => 'Fair', 'color' => '#f59e0b'];
+    return ['grade' => 'D', 'label' => 'Needs Improvement', 'color' => '#ef4444'];
+}
+
+/**
+ * Get active food drives.
+ */
+function get_active_food_drives($pdo, $limit = 6) {
+    $stmt = $pdo->prepare("SELECT fd.*, u.name AS organizer_name FROM food_drives fd JOIN users u ON fd.organizer_id = u.id WHERE fd.status IN ('upcoming', 'active') ORDER BY fd.event_date ASC LIMIT ?");
+    $stmt->execute([$limit]);
+    return $stmt->fetchAll();
+}
+
+/**
+ * Get user's food drive registrations.
+ */
+function get_user_drive_registrations($pdo, $user_id) {
+    $stmt = $pdo->prepare("SELECT fdr.*, fd.title, fd.event_date, fd.location, fd.status AS drive_status FROM food_drive_registrations fdr JOIN food_drives fd ON fdr.drive_id = fd.id WHERE fdr.user_id = ? ORDER BY fd.event_date DESC");
+    $stmt->execute([$user_id]);
+    return $stmt->fetchAll();
+}
+
+/**
+ * Get unread messages count for display in header.
+ */
+function count_unread_conversations($pdo, $user_id) {
+    $stmt = $pdo->prepare("SELECT COUNT(DISTINCT donation_id) FROM messages WHERE receiver_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+    return (int)$stmt->fetchColumn();
+}
+
+/**
  * Generate a PDF Certificate of Appreciation for a completed donation.
  *
  * @param PDO    $pdo
@@ -1455,9 +1750,320 @@ function create_volunteer_delivery($pdo, $donation_id, $request_id, $consumer_id
     $stmt->execute([$donation_id, $request_id]);
     if ($stmt->fetch()) return false;
 
-    $stmt = $pdo->prepare("INSERT INTO volunteer_deliveries (donation_id, request_id, consumer_id, donor_id, status) VALUES (?, ?, ?, ?, 'assigned')");
-    $stmt->execute([$donation_id, $request_id, $consumer_id, $donor_id]);
-    return $pdo->lastInsertId();
+    $pdo->beginTransaction();
+    try {
+        $stmt = $pdo->prepare("INSERT INTO volunteer_deliveries (donation_id, request_id, consumer_id, donor_id, status) VALUES (?, ?, ?, ?, 'assigned')");
+        $stmt->execute([$donation_id, $request_id, $consumer_id, $donor_id]);
+        $delivery_id = $pdo->lastInsertId();
+
+        // AUTO-ASSIGN: Find the best matching volunteer and assign them
+        $volunteer = find_matching_volunteers($pdo, $donation_id, 1);
+        if (!empty($volunteer)) {
+            $best = $volunteer[0];
+            $assignStmt = $pdo->prepare("UPDATE volunteer_deliveries SET volunteer_user_id = ?, status = 'accepted', accepted_at = NOW(), assignment_method = 'auto' WHERE id = ? AND volunteer_user_id IS NULL");
+            $assignStmt->execute([$best['user_id'], $delivery_id]);
+
+            // Notify the volunteer
+            $dStmt = $pdo->prepare("SELECT food_item FROM donations WHERE id = ?");
+            $dStmt->execute([$donation_id]);
+            $food = $dStmt->fetchColumn();
+
+            create_notification($pdo, $best['user_id'], 'delivery_auto_assigned',
+                '🎯 New delivery auto-assigned to you! Please pick up "' . $food . '" and deliver it to the requester. Check your active deliveries.',
+                'dashboard.php?page=volunteer', true);
+
+            // Notify donor
+            create_notification($pdo, $donor_id, 'volunteer_assigned',
+                'A volunteer (' . htmlspecialchars($best['full_name']) . ') has been auto-assigned to deliver "' . $food . '". They will contact you soon.',
+                'dashboard.php?page=manage-donation', true);
+
+            // Notify consumer
+            create_notification($pdo, $consumer_id, 'volunteer_assigned',
+                '🎉 A volunteer (' . htmlspecialchars($best['full_name']) . ') has been assigned to deliver "' . $food . '" to you!',
+                'dashboard.php?page=track-request', true);
+        } else {
+            // No volunteers available — notify admin and donor
+            $dStmt = $pdo->prepare("SELECT food_item FROM donations WHERE id = ?");
+            $dStmt->execute([$donation_id]);
+            $food = $dStmt->fetchColumn();
+
+            create_notification($pdo, $donor_id, 'delivery_needed',
+                'A volunteer delivery was requested for "' . $food . '" but no volunteers are currently available. The delivery is open for volunteers to accept.',
+                'dashboard.php?page=manage-donation', true);
+
+            create_notification($pdo, $consumer_id, 'delivery_needed',
+                'A volunteer delivery was requested for "' . $food . '". No volunteers are available right now, but the delivery is listed for volunteers to pick up.',
+                'dashboard.php?page=track-request', true);
+        }
+
+        $pdo->commit();
+        return $delivery_id;
+    } catch (Exception $e) {
+        $pdo->rollBack();
+        return false;
+    }
+}
+
+// ──────────────────────────────────────────────────────────────
+// NEW: AUTO VOLUNTEER MATCHING & REJECTION/REASSIGNMENT
+// ──────────────────────────────────────────────────────────────
+
+/**
+ * Find matching available volunteers for a donation based on proximity and availability.
+ * Returns top-N volunteers sorted by best match.
+ */
+function find_matching_volunteers($pdo, $donation_id, $limit = 5) {
+    // Get donation location
+    $dStmt = $pdo->prepare("SELECT pickup_address, city, latitude, longitude FROM donations WHERE id = ?");
+    $dStmt->execute([$donation_id]);
+    $donation = $dStmt->fetch();
+    if (!$donation) return [];
+
+    $donationTokens = tokenize_address($donation['pickup_address'] ?? '');
+
+    // Find ALL approved, available volunteers ordered by:
+    // 1. Currently online (available > busy > offline)
+    // 2. Higher rating
+    // 3. More completed deliveries
+    // 4. Location proximity (token match)
+    $stmt = $pdo->prepare("
+        SELECT v.*, u.name AS user_name 
+        FROM volunteers v 
+        JOIN users u ON v.user_id = u.id 
+        WHERE v.status = 'approved'
+          AND v.online_status != 'offline'
+        ORDER BY 
+          FIELD(v.online_status, 'available', 'busy') ASC,
+          v.rating DESC,
+          v.completed_deliveries DESC,
+          v.delivery_radius DESC
+        LIMIT ?
+    ");
+    $limit = (int)$limit;
+    $stmt->bindValue(1, $limit, PDO::PARAM_INT);
+    $stmt->execute();
+    $volunteers = $stmt->fetchAll();
+
+    if (empty($volunteers)) return [];
+
+    // Score each volunteer by location proximity
+    $scored = [];
+    foreach ($volunteers as $vol) {
+        $score = 0;
+
+        // Location proximity (token matching)
+        $volTokens = tokenize_address($vol['address'] ?? '');
+        if (!empty($donationTokens)) {
+            $common = array_intersect($donationTokens, $volTokens);
+            $score += count($common) * 10;
+        }
+
+        // Online status bonus
+        if ($vol['online_status'] === 'available') $score += 30;
+        elseif ($vol['online_status'] === 'busy') $score += 10;
+
+        // Rating bonus
+        $score += (float)$vol['rating'] * 5;
+
+        // Experience bonus
+        $score += (int)$vol['completed_deliveries'] * 3;
+
+        // Radius bonus (higher radius = more willing to travel)
+        $score += (int)$vol['delivery_radius'] * 2;
+
+        $scored[] = ['volunteer' => $vol, 'score' => $score];
+    }
+
+    // Sort by score descending
+    usort($scored, function ($a, $b) {
+        return $b['score'] - $a['score'];
+    });
+
+    return array_map(function ($s) { return $s['volunteer']; }, $scored);
+}
+
+/**
+ * Auto-assign the best matching volunteer to a delivery.
+ * Called automatically after create_volunteer_delivery() and after volunteer rejection.
+ * Returns the assigned volunteer user_id or null if none found.
+ */
+function auto_assign_volunteer($pdo, $delivery_id) {
+    // Get delivery info
+    $stmt = $pdo->prepare("SELECT * FROM volunteer_deliveries WHERE id = ? AND volunteer_user_id IS NULL");
+    $stmt->execute([$delivery_id]);
+    $delivery = $stmt->fetch();
+    if (!$delivery) return null;
+
+    // Find best matching volunteer
+    $volunteers = find_matching_volunteers($pdo, $delivery['donation_id'], 3);
+    if (empty($volunteers)) return null;
+
+    $best = $volunteers[0];
+
+    // Assign the best volunteer
+    $assignStmt = $pdo->prepare("UPDATE volunteer_deliveries SET volunteer_user_id = ?, status = 'accepted', accepted_at = NOW(), assignment_method = 'auto' WHERE id = ? AND volunteer_user_id IS NULL");
+    $assignStmt->execute([$best['user_id'], $delivery_id]);
+    if ($assignStmt->rowCount() === 0) return null;
+
+    // Notifications
+    $dStmt = $pdo->prepare("SELECT food_item FROM donations WHERE id = ?");
+    $dStmt->execute([$delivery['donation_id']]);
+    $food = $dStmt->fetchColumn();
+
+    create_notification($pdo, $best['user_id'], 'delivery_auto_assigned',
+        '🎯 New delivery auto-assigned! Please deliver "' . $food . '". Check your active deliveries.',
+        'dashboard.php?page=volunteer', true);
+
+    create_notification($pdo, $delivery['donor_id'], 'volunteer_assigned',
+        'A volunteer (' . htmlspecialchars($best['full_name']) . ') has been auto-assigned to deliver "' . $food . '".',
+        'dashboard.php?page=manage-donation', true);
+
+    create_notification($pdo, $delivery['consumer_id'], 'volunteer_assigned',
+        '🎉 A volunteer (' . htmlspecialchars($best['full_name']) . ') has been assigned to deliver "' . $food . '"!',
+        'dashboard.php?page=track-request', true);
+
+    return $best['user_id'];
+}
+
+/**
+ * Volunteer rejects/declines a delivery. Records reason and triggers auto-reassignment.
+ */
+function reject_volunteer_delivery($pdo, $delivery_id, $volunteer_user_id, $reason = '') {
+    $stmt = $pdo->prepare("SELECT * FROM volunteer_deliveries WHERE id = ? AND volunteer_user_id = ? AND status IN ('assigned', 'accepted')");
+    $stmt->execute([$delivery_id, $volunteer_user_id]);
+    $delivery = $stmt->fetch();
+    if (!$delivery) return false;
+
+    $pdo->beginTransaction();
+    try {
+        // Cancel this assignment
+        $stmt = $pdo->prepare("UPDATE volunteer_deliveries SET status = 'cancelled', cancelled_at = NOW(), cancellation_reason = ? WHERE id = ?");
+        $stmt->execute([$reason ?: 'Volunteer declined', $delivery_id]);
+
+        $dStmt = $pdo->prepare("SELECT food_item FROM donations WHERE id = ?");
+        $dStmt->execute([$delivery['donation_id']]);
+        $food = $dStmt->fetchColumn();
+
+        $vStmt = $pdo->prepare("SELECT full_name FROM volunteers WHERE user_id = ?");
+        $vStmt->execute([$volunteer_user_id]);
+        $volName = $vStmt->fetchColumn() ?: 'A volunteer';
+
+        create_notification($pdo, $delivery['donor_id'], 'delivery_rejected',
+            $volName . ' has declined the delivery for "' . $food . '". The system will try to reassign.',
+            'dashboard.php?page=manage-donation', true);
+
+        create_notification($pdo, $delivery['consumer_id'], 'delivery_rejected',
+            'The volunteer declined delivery for "' . $food . '". We are finding another volunteer.',
+            'dashboard.php?page=track-request', true);
+
+        // Create a NEW delivery record for reassignment (marked as reassigned)
+        $stmt = $pdo->prepare("INSERT INTO volunteer_deliveries (donation_id, request_id, consumer_id, donor_id, status, assignment_method) VALUES (?, ?, ?, ?, 'assigned', 'reassigned')");
+        $stmt->execute([$delivery['donation_id'], $delivery['request_id'], $delivery['consumer_id'], $delivery['donor_id']]);
+        $new_delivery_id = $pdo->lastInsertId();
+
+        $pdo->commit();
+
+        // AUTO-REASSIGNMENT: Try to find another volunteer
+        $reassigned = auto_assign_volunteer($pdo, $new_delivery_id);
+        if ($reassigned) {
+            create_notification($pdo, $delivery['donor_id'], 'delivery_reassigned',
+                'A new volunteer has been assigned to deliver "' . $food . '".',
+                'dashboard.php?page=manage-donation', true);
+            create_notification($pdo, $delivery['consumer_id'], 'delivery_reassigned',
+                '🎉 A new volunteer has been assigned to deliver "' . $food . '"!',
+                'dashboard.php?page=track-request', true);
+        } else {
+            create_notification($pdo, $delivery['donor_id'], 'delivery_unassigned',
+                'No volunteers are currently available for "' . $food . '". The delivery is open for acceptance.',
+                'dashboard.php?page=manage-donation', true);
+            create_notification($pdo, $delivery['consumer_id'], 'delivery_unassigned',
+                'No volunteers are currently available for "' . $food . '". The delivery is open for volunteers.',
+                'dashboard.php?page=track-request', true);
+        }
+
+        return true;
+    } catch (Exception $e) {
+        $pdo->rollBack();
+        return false;
+    }
+}
+
+/**
+ * Admin manually assigns a volunteer to a delivery.
+ */
+function admin_assign_volunteer_to_delivery($pdo, $delivery_id, $volunteer_user_id) {
+    $stmt = $pdo->prepare("SELECT * FROM volunteer_deliveries WHERE id = ? AND status = 'assigned'");
+    $stmt->execute([$delivery_id]);
+    $delivery = $stmt->fetch();
+    if (!$delivery) return false;
+
+    $pdo->beginTransaction();
+    try {
+        $stmt = $pdo->prepare("UPDATE volunteer_deliveries SET volunteer_user_id = ?, status = 'accepted', accepted_at = NOW(), assignment_method = 'admin_assign' WHERE id = ?");
+        $stmt->execute([$volunteer_user_id, $delivery_id]);
+
+        $dStmt = $pdo->prepare("SELECT food_item FROM donations WHERE id = ?");
+        $dStmt->execute([$delivery['donation_id']]);
+        $food = $dStmt->fetchColumn();
+
+        $vStmt = $pdo->prepare("SELECT full_name FROM volunteers WHERE user_id = ?");
+        $vStmt->execute([$volunteer_user_id]);
+        $volName = $vStmt->fetchColumn() ?: 'A volunteer';
+
+        create_notification($pdo, $volunteer_user_id, 'delivery_admin_assigned',
+            '🔔 You have been assigned by admin to deliver "' . $food . '". Please check your active deliveries.',
+            'dashboard.php?page=volunteer', true);
+
+        create_notification($pdo, $delivery['donor_id'], 'delivery_admin_assigned',
+            'Admin assigned ' . $volName . ' to deliver "' . $food . '".',
+            'dashboard.php?page=manage-donation', true);
+
+        create_notification($pdo, $delivery['consumer_id'], 'delivery_admin_assigned',
+            '🔔 ' . $volName . ' has been assigned by admin to deliver "' . $food . '"!',
+            'dashboard.php?page=track-request', true);
+
+        $pdo->commit();
+        return true;
+    } catch (Exception $e) {
+        $pdo->rollBack();
+        return false;
+    }
+}
+
+/**
+ * Admin unassigns a volunteer from a delivery, resetting it to available.
+ */
+function admin_unassign_volunteer_from_delivery($pdo, $delivery_id) {
+    $stmt = $pdo->prepare("SELECT * FROM volunteer_deliveries WHERE id = ? AND status IN ('accepted', 'assigned', 'picked_up')");
+    $stmt->execute([$delivery_id]);
+    $delivery = $stmt->fetch();
+    if (!$delivery || !$delivery['volunteer_user_id']) return false;
+
+    $pdo->beginTransaction();
+    try {
+        $oldVolunteerId = $delivery['volunteer_user_id'];
+
+        $stmt = $pdo->prepare("UPDATE volunteer_deliveries SET volunteer_user_id = NULL, status = 'assigned', accepted_at = NULL WHERE id = ?");
+        $stmt->execute([$delivery_id]);
+
+        $dStmt = $pdo->prepare("SELECT food_item FROM donations WHERE id = ?");
+        $dStmt->execute([$delivery['donation_id']]);
+        $food = $dStmt->fetchColumn();
+
+        create_notification($pdo, $oldVolunteerId, 'delivery_unassigned',
+            'You have been unassigned from delivery of "' . $food . '" by admin.',
+            'dashboard.php?page=volunteer', true);
+
+        create_notification($pdo, $delivery['donor_id'], 'delivery_unassigned',
+            'The volunteer for "' . $food . '" has been unassigned by admin. The delivery is open again.',
+            'dashboard.php?page=manage-donation', true);
+
+        $pdo->commit();
+        return true;
+    } catch (Exception $e) {
+        $pdo->rollBack();
+        return false;
+    }
 }
 
 /**
@@ -1558,7 +2164,7 @@ function accept_volunteer_delivery($pdo, $delivery_id, $volunteer_user_id) {
     if (!$delivery) return false;
 
     // Prevent race condition: UPDATE checks volunteer_user_id IS NULL, so only one volunteer can accept
-    $stmt = $pdo->prepare("UPDATE volunteer_deliveries SET volunteer_user_id = ?, status = 'accepted', accepted_at = NOW() WHERE id = ? AND status = 'assigned' AND volunteer_user_id IS NULL");
+    $stmt = $pdo->prepare("UPDATE volunteer_deliveries SET volunteer_user_id = ?, status = 'accepted', accepted_at = NOW(), assignment_method = 'manual_accept' WHERE id = ? AND status = 'assigned' AND volunteer_user_id IS NULL");
     $stmt->execute([$volunteer_user_id, $delivery_id]);
     if ($stmt->rowCount() === 0) {
         return false;
@@ -1725,6 +2331,153 @@ function get_volunteer_activity_stats($pdo) {
     $stats['recent_activity'] = $stmt->fetchAll();
     
     return $stats;
+}
+
+/**
+ * Comprehensive Delivery Matching Analytics.
+ * Returns auto vs manual counts, avg response times, volunteer utilization, and trends.
+ */
+function get_delivery_matching_analytics($pdo) {
+    $analytics = [];
+
+    // ── 1. Assignment Method Distribution ──
+    $methods = ['auto', 'manual_accept', 'admin_assign', 'reassigned'];
+    $assignCounts = [];
+    foreach ($methods as $m) {
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM volunteer_deliveries WHERE assignment_method = ?");
+        $stmt->execute([$m]);
+        $assignCounts[$m] = (int)$stmt->fetchColumn();
+    }
+    // Also count null/legacy records (set before tracking was added)
+    $stmt = $pdo->query("SELECT COUNT(*) FROM volunteer_deliveries WHERE assignment_method IS NULL");
+    $assignCounts['legacy'] = (int)$stmt->fetchColumn();
+    $assignCounts['total_tracked'] = (int)$assignCounts['auto'] + (int)$assignCounts['manual_accept'] + (int)$assignCounts['admin_assign'] + (int)$assignCounts['reassigned'];
+    $analytics['assignment_methods'] = $assignCounts;
+
+    // ── 2. Average Response Time (time from 'assigned' → 'accepted' in minutes) ──
+    $stmt = $pdo->query("
+        SELECT 
+            ROUND(AVG(TIMESTAMPDIFF(MINUTE, created_at, accepted_at)), 1) AS avg_response_mins,
+            ROUND(AVG(TIMESTAMPDIFF(MINUTE, created_at, picked_up_at)), 1) AS avg_pickup_mins,
+            ROUND(AVG(TIMESTAMPDIFF(MINUTE, created_at, delivered_at)), 1) AS avg_delivery_mins,
+            ROUND(AVG(TIMESTAMPDIFF(MINUTE, accepted_at, delivered_at)), 1) AS avg_transit_mins
+        FROM volunteer_deliveries 
+        WHERE accepted_at IS NOT NULL 
+          AND accepted_at IS NOT NULL
+    ");
+    $analytics['response_times'] = $stmt->fetch();
+
+    // Average response time by assignment method
+    $respByMethod = [];
+    foreach (['auto', 'manual_accept', 'admin_assign'] as $m) {
+        $stmt = $pdo->prepare("
+            SELECT ROUND(AVG(TIMESTAMPDIFF(MINUTE, created_at, accepted_at)), 1) AS avg_response 
+            FROM volunteer_deliveries 
+            WHERE assignment_method = ? AND accepted_at IS NOT NULL
+        ");
+        $stmt->execute([$m]);
+        $val = $stmt->fetchColumn();
+        $respByMethod[$m] = $val ? (float)$val : 0;
+    }
+    $analytics['response_by_method'] = $respByMethod;
+
+    // ── 3. Volunteer Utilization Rates ──
+    $stmt = $pdo->query("
+        SELECT 
+            COUNT(DISTINCT v.user_id) AS total_volunteers,
+            COUNT(DISTINCT CASE WHEN vd.id IS NOT NULL THEN v.user_id END) AS active_volunteers,
+            COUNT(DISTINCT CASE WHEN v.online_status = 'available' THEN v.user_id END) AS available_now,
+            COUNT(DISTINCT CASE WHEN v.online_status = 'busy' THEN v.user_id END) AS busy_now,
+            ROUND(
+                COUNT(DISTINCT CASE WHEN vd.id IS NOT NULL THEN v.user_id END) 
+                / NULLIF(COUNT(DISTINCT v.user_id), 0) * 100, 1
+            ) AS utilization_pct
+        FROM volunteers v
+        LEFT JOIN volunteer_deliveries vd ON v.user_id = vd.volunteer_user_id AND vd.status IN ('accepted', 'picked_up', 'in_transit', 'delivered')
+        WHERE v.status = 'approved'
+    ");
+    $analytics['volunteer_utilization'] = $stmt->fetch();
+
+    // ── 4. Top performing volunteers ──
+    $stmt = $pdo->query("
+        SELECT 
+            vu.name AS volunteer_name,
+            v.user_id,
+            v.rating,
+            v.completed_deliveries,
+            v.community_points,
+            v.delivery_radius,
+            v.vehicle_type,
+            v.online_status,
+            COUNT(vd.id) AS total_assigned,
+            SUM(CASE WHEN vd.status = 'delivered' THEN 1 ELSE 0 END) AS delivered_count,
+            ROUND(AVG(TIMESTAMPDIFF(MINUTE, vd.accepted_at, vd.delivered_at)), 1) AS avg_delivery_time
+        FROM volunteers v
+        JOIN users vu ON v.user_id = vu.id
+        LEFT JOIN volunteer_deliveries vd ON v.user_id = vd.volunteer_user_id
+        WHERE v.status = 'approved'
+        GROUP BY v.user_id
+        ORDER BY v.completed_deliveries DESC, v.rating DESC
+        LIMIT 10
+    ");
+    $analytics['top_volunteers'] = $stmt->fetchAll();
+
+    // ── 5. Daily/Weekly Delivery Trends (last 14 days) ──
+    $stmt = $pdo->query("
+        SELECT 
+            DATE(created_at) AS date,
+            COUNT(*) AS total_created,
+            SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END) AS delivered,
+            SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled,
+            SUM(CASE WHEN assignment_method = 'auto' THEN 1 ELSE 0 END) AS auto_assigned,
+            SUM(CASE WHEN assignment_method = 'manual_accept' THEN 1 ELSE 0 END) AS manual_accepted
+        FROM volunteer_deliveries
+        WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 14 DAY)
+        GROUP BY DATE(created_at)
+        ORDER BY date ASC
+    ");
+    $analytics['daily_trends'] = $stmt->fetchAll();
+
+    // ── 6. Completion rate (only terminal statuses: delivered or cancelled) ──
+    $stmt = $pdo->query("
+        SELECT 
+            SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END) AS completed,
+            SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled_count,
+            ROUND(SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END) 
+                / NULLIF(SUM(CASE WHEN status IN ('delivered', 'cancelled') THEN 1 ELSE 0 END), 0) * 100, 1) AS completion_rate
+        FROM volunteer_deliveries
+        WHERE status IN ('delivered', 'cancelled')
+    ");
+    $analytics['completion'] = $stmt->fetch();
+    $analytics['completion']['total'] = (int)($analytics['completion']['completed'] ?? 0) + (int)($analytics['completion']['cancelled_count'] ?? 0);
+
+    // ── 7. Top rejection reasons ──
+    $stmt = $pdo->query("
+        SELECT cancellation_reason, COUNT(*) AS count
+        FROM volunteer_deliveries 
+        WHERE cancellation_reason IS NOT NULL AND cancellation_reason != ''
+        GROUP BY cancellation_reason
+        ORDER BY count DESC
+        LIMIT 5
+    ");
+    $analytics['rejection_reasons'] = $stmt->fetchAll();
+
+    // ── 8. Average deliveries per volunteer ──
+    $stmt = $pdo->query("
+        SELECT 
+            ROUND(AVG(delivery_count), 1) AS avg_per_volunteer,
+            MAX(delivery_count) AS max_deliveries
+        FROM (
+            SELECT v.user_id, COUNT(vd.id) AS delivery_count
+            FROM volunteers v
+            LEFT JOIN volunteer_deliveries vd ON v.user_id = vd.volunteer_user_id
+            WHERE v.status = 'approved'
+            GROUP BY v.user_id
+        ) counts
+    ");
+    $analytics['avg_deliveries_per_volunteer'] = $stmt->fetch();
+
+    return $analytics;
 }
 
 /**

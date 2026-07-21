@@ -194,9 +194,163 @@ class IntentDetector {
             'roles'    => ['admin'],
         ],
 
+        // ── CERTIFICATE & RECOGNITION ──
+        'certificate_info' => [
+            'keywords' => ['certificate', 'appreciation', 'certificate of appreciation', 'recognition', 'award', 'donation certificate', 'get certificate', 'download certificate', 'share certificate'],
+            'priority' => 80,
+            'module'   => 'general',
+            'roles'    => ['guest', 'donor', 'consumer', 'volunteer', 'ngo', 'admin'],
+        ],
+
+        // ── RATING & REVIEW ──
+        'rating_system' => [
+            'keywords' => ['rating', 'review', 'rate', 'star', 'feedback', 'how to rate', 'rate donor', 'rate receiver', 'leave review', 'my rating', 'average rating'],
+            'priority' => 70,
+            'module'   => 'general',
+            'roles'    => ['guest', 'donor', 'consumer', 'volunteer', 'ngo', 'admin'],
+        ],
+
+        // ── NOTIFICATIONS ──
+        'notifications' => [
+            'keywords' => ['notification', 'notifications', 'alerts', 'alert', 'notify', 'notification settings', 'turn off notifications', 'email notification', 'push notification', 'silent', 'mute'],
+            'priority' => 70,
+            'module'   => 'general',
+            'roles'    => ['guest', 'donor', 'consumer', 'volunteer', 'ngo', 'admin'],
+        ],
+
+        // ── ACCOUNT SETTINGS ──
+        'account_settings' => [
+            'keywords' => ['edit profile', 'update profile', 'my profile', 'account settings', 'edit account', 'change name', 'update email', 'change phone', 'change address', 'update address', 'profile settings', 'manage account'],
+            'priority' => 80,
+            'module'   => 'auth',
+            'roles'    => ['guest', 'donor', 'consumer', 'volunteer', 'ngo', 'admin'],
+        ],
+        'change_password' => [
+            'keywords' => ['change password', 'update password', 'reset my password', 'new password', 'change my pass', 'change pass', 'password update', 'set password', 'create password'],
+            'priority' => 85,
+            'module'   => 'auth',
+            'roles'    => ['guest', 'donor', 'consumer', 'volunteer', 'ngo', 'admin'],
+        ],
+
+        // ── FOOD SAFETY ──
+        'food_safety' => [
+            'keywords' => ['food safety', 'safe food', 'how to store food', 'food storage', 'food handling', 'hygiene', 'food hygiene', 'safe to eat', 'food temperature', 'food freshness', 'check food quality', 'expired food safety', 'leftover safety'],
+            'priority' => 75,
+            'module'   => 'donation',
+            'roles'    => ['guest', 'donor', 'consumer', 'volunteer', 'ngo', 'admin'],
+        ],
+
+        // ── OTP & VERIFICATION ──
+        'otp_verification' => [
+            'keywords' => ['otp', 'verification', 'verify', 'email verification', 'verify account', 'verify email', 'otp code', 'verification code', 'did not receive otp', 'otp expired', 'resend otp', 'activate account'],
+            'priority' => 85,
+            'module'   => 'auth',
+            'roles'    => ['guest', 'donor', 'consumer', 'volunteer', 'ngo', 'admin'],
+        ],
+
+        // ── PRIVACY & TERMS ──
+        'privacy_policy' => [
+            'keywords' => ['privacy', 'privacy policy', 'data protection', 'my data', 'personal information', 'data privacy', 'data security', 'information security', 'is my data safe', 'how is my data used', 'delete my data', 'delete account'],
+            'priority' => 70,
+            'module'   => 'general',
+            'roles'    => ['guest', 'donor', 'consumer', 'volunteer', 'ngo', 'admin'],
+        ],
+        'terms_of_service' => [
+            'keywords' => ['terms', 'terms of service', 'terms and conditions', 'terms & conditions', 'conditions', 'rules', 'platform rules', 'usage policy', 'acceptable use', 'community guidelines'],
+            'priority' => 60,
+            'module'   => 'general',
+            'roles'    => ['guest', 'donor', 'consumer', 'volunteer', 'ngo', 'admin'],
+        ],
+
+        // ── PICKUP & LOGISTICS ──
+        'pickup_process' => [
+            'keywords' => ['pickup', 'pick up', 'pick-up', 'coordinate pickup', 'arrange pickup', 'schedule pickup', 'pickup time', 'pickup location', 'where to pickup', 'when to pickup', 'pickup food', 'collect food', 'food collection', 'how to collect'],
+            'priority' => 80,
+            'module'   => 'general',
+            'roles'    => ['guest', 'donor', 'consumer', 'volunteer', 'ngo', 'admin'],
+        ],
+
+        // ── EXPIRY MANAGEMENT ──
+        'expiry_management' => [
+            'keywords' => ['expiry', 'expiration', 'expire', 'expiry time', 'how long', 'expiration date', 'food expiry', 'donation expires', 'expired donation', 'extend expiry', 'set expiry', 'time limit'],
+            'priority' => 70,
+            'module'   => 'donation',
+            'roles'    => ['guest', 'donor', 'consumer', 'volunteer', 'ngo', 'admin'],
+        ],
+
+        // ── TRACKING ──
+        'how_to_track' => [
+            'keywords' => ['track', 'tracking', 'track my donation', 'track my request', 'donation progress', 'request progress', 'order status', 'where is my donation', 'status of donation', 'delivery status', 'check status', 'monitor'],
+            'priority' => 80,
+            'module'   => 'general',
+            'roles'    => ['guest', 'donor', 'consumer', 'volunteer', 'ngo', 'admin'],
+        ],
+
+        // ── NGO PARTNERSHIP ──
+        'ngo_partnership' => [
+            'keywords' => ['ngo', 'ngo partner', 'organization', 'partnership', 'partner with sayog', 'collaborate', 'institution', 'restaurant partnership', 'corporate partner', 'bulk donation', 'sponsor', 'food drive', 'charity partner'],
+            'priority' => 70,
+            'module'   => 'general',
+            'roles'    => ['guest', 'donor', 'consumer', 'volunteer', 'ngo', 'admin'],
+        ],
+
+        // ── CANCELLATION ──
+        'cancel_donation' => [
+            'keywords' => ['cancel donation', 'remove donation', 'delete donation', 'donation cancel', 'stop donation', 'undo donation', 'withdraw donation'],
+            'priority' => 80,
+            'module'   => 'donation',
+            'roles'    => ['guest', 'donor', 'consumer', 'volunteer', 'ngo', 'admin'],
+        ],
+        'cancel_request' => [
+            'keywords' => ['cancel request', 'remove request', 'delete request', 'request cancel', 'stop request', 'undo request', 'withdraw request'],
+            'priority' => 80,
+            'module'   => 'request',
+            'roles'    => ['guest', 'donor', 'consumer', 'volunteer', 'ngo', 'admin'],
+        ],
+
+        // ── REPORT ISSUE ──
+        'report_issue' => [
+            'keywords' => ['report', 'report issue', 'report problem', 'report user', 'complaint', 'file complaint', 'problem with', 'issue with', 'bad experience', 'unsafe food', 'report donation', 'report request', 'suspend user', 'block user'],
+            'priority' => 75,
+            'module'   => 'general',
+            'roles'    => ['guest', 'donor', 'consumer', 'volunteer', 'ngo', 'admin'],
+        ],
+
+        // ── BENEFITS OF REGISTRATION ──
+        'benefits_registration' => [
+            'keywords' => ['benefits of registering', 'why register', 'why create account', 'advantages of registration', 'what do i get', 'register benefits', 'sign up benefits', 'why join sayog', 'why should i join'],
+            'priority' => 75,
+            'module'   => 'auth',
+            'roles'    => ['guest'],
+        ],
+
+        // ── WHATSAPP ──
+        'whatsapp_integration' => [
+            'keywords' => ['whatsapp', 'whatsapp support', 'chat on whatsapp', 'whatsapp group', 'whatsapp contact', 'whatsapp number', 'whatsapp integration'],
+            'priority' => 70,
+            'module'   => 'general',
+            'roles'    => ['guest', 'donor', 'consumer', 'volunteer', 'ngo', 'admin'],
+        ],
+
+        // ── LANGUAGE ──
+        'language_support' => [
+            'keywords' => ['language', 'nepali', 'नेपाली', 'english', 'change language', 'translation', 'multi language', 'nepali support', 'भाषा', 'switch language', 'translate'],
+            'priority' => 60,
+            'module'   => 'general',
+            'roles'    => ['guest', 'donor', 'consumer', 'volunteer', 'ngo', 'admin'],
+        ],
+
+        // ── MOBILE ACCESS ──
+        'mobile_access' => [
+            'keywords' => ['mobile app', 'android', 'iphone', 'ios', 'app download', 'mobile application', 'play store', 'app store', 'mobile version', 'mobile site', 'smartphone', 'phone access', 'mobile friendly'],
+            'priority' => 60,
+            'module'   => 'general',
+            'roles'    => ['guest', 'donor', 'consumer', 'volunteer', 'ngo', 'admin'],
+        ],
+
         // ── HELP / FALLBACK ──
         'help' => [
-            'keywords' => ['help', 'what can you do', 'capabilities', 'features', 'available commands', 'what can i ask', 'how can you help', 'what do you know', 'options', 'menu'],
+            'keywords' => ['help', 'what can you do', 'capabilities', 'features', 'available commands', 'what can i ask', 'how can you help', 'what do you know', 'options', 'menu', 'list of topics', 'show topics'],
             'priority' => 80,
             'module'   => 'general',
             'roles'    => ['guest', 'donor', 'consumer', 'volunteer', 'ngo', 'admin'],

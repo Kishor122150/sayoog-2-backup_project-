@@ -9,12 +9,12 @@
             <div style="min-width: 160px;">
                 <h4 style="font-size:0.9rem; font-weight:700; margin-bottom:12px; color: #111827;" data-i18n="footer.quick_links">Quick Links</h4>
                 <ul style="list-style:none; padding:0; margin:0;">
-                    <li style="margin-bottom:8px;"><a href="index.php" style="color:#6b7280;text-decoration:none;font-size:0.85rem;" data-i18n="nav.home">Home</a></li>
-                    <li style="margin-bottom:8px;"><a href="donations.php" style="color:#6b7280;text-decoration:none;font-size:0.85rem;" data-i18n="nav.food_listings">Food Listings</a></li>
-                    <li style="margin-bottom:8px;"><a href="volunteers.php" style="color:#6b7280;text-decoration:none;font-size:0.85rem;" data-i18n="nav.volunteers">Volunteers</a></li>
-                    <li style="margin-bottom:8px;"><a href="team.php" style="color:#6b7280;text-decoration:none;font-size:0.85rem;" data-i18n="nav.our_team">Our Team</a></li>
-                    <li style="margin-bottom:8px;"><a href="about.php" style="color:#6b7280;text-decoration:none;font-size:0.85rem;" data-i18n="nav.about">About</a></li>
-                    <li style="margin-bottom:8px;"><a href="contact.php" style="color:#6b7280;text-decoration:none;font-size:0.85rem;" data-i18n="nav.contact">Contact</a></li>
+                    <li style="margin-bottom:8px;"><a href="/frontend/index.php" style="color:#6b7280;text-decoration:none;font-size:0.85rem;" data-i18n="nav.home">Home</a></li>
+                    <li style="margin-bottom:8px;"><a href="/frontend/donations.php" style="color:#6b7280;text-decoration:none;font-size:0.85rem;" data-i18n="nav.food_listings">Food Listings</a></li>
+                    <li style="margin-bottom:8px;"><a href="/frontend/volunteers.php" style="color:#6b7280;text-decoration:none;font-size:0.85rem;" data-i18n="nav.volunteers">Volunteers</a></li>
+                    <li style="margin-bottom:8px;"><a href="/frontend/team.php" style="color:#6b7280;text-decoration:none;font-size:0.85rem;" data-i18n="nav.our_team">Our Team</a></li>
+                    <li style="margin-bottom:8px;"><a href="/frontend/about.php" style="color:#6b7280;text-decoration:none;font-size:0.85rem;" data-i18n="nav.about">About</a></li>
+                    <li style="margin-bottom:8px;"><a href="/frontend/contact.php" style="color:#6b7280;text-decoration:none;font-size:0.85rem;" data-i18n="nav.contact">Contact</a></li>
                 </ul>
             </div>
             <div style="min-width: 120px;">

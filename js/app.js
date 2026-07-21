@@ -461,7 +461,7 @@ const translations = {
                 if(_mapUserLat&&_mapUserLng){var d=hDist(_mapUserLat,_mapUserLng,lat,lng);dist='<div class="popup-distance">📍 '+d.toFixed(1)+' km away</div>';}
                 var gm='https://www.google.com/maps/dir/?api=1&destination='+encodeURIComponent(item.address);
                 marker.bindPopup('<strong>'+item.food_item+'</strong><div class="popup-address">'+item.address+'</div>'+(city?'<div style="color:#059669;">🏙️ '+city+'</div>':'')+dist+
-                    '<div style="margin-top:8px;display:flex;gap:6px;"><a href="donation.php?id='+item.id+'" class="popup-link">View</a><a href="'+gm+'" target="_blank" class="popup-link" style="background:rgba(59,130,246,0.08);color:#3b82f6;">Directions</a></div>');
+                    '<div style="margin-top:8px;display:flex;gap:6px;"><a href="/frontend/donation.php?id='+item.id+'" class="popup-link">View</a><a href="'+gm+'" target="_blank" class="popup-link" style="background:rgba(59,130,246,0.08);color:#3b82f6;">Directions</a></div>');
             }
 
             function processQueue(idx){

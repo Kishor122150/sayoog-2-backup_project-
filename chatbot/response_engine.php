@@ -173,6 +173,7 @@ class ResponseEngine {
                         ['text' => 'How to donate food'],
                         ['text' => 'Available food'],
                         ['text' => 'Platform Statistics'],
+                        ['text' => 'Become a Volunteer'],
                     ];
                 } elseif ($role === 'admin') {
                     $suggestions = [
@@ -187,6 +188,7 @@ class ResponseEngine {
                         ['text' => 'My Requests'],
                         ['text' => 'Available Food'],
                         ['text' => 'Create Donation'],
+                        ['text' => 'My Certificates'],
                     ];
                 }
                 break;
@@ -197,6 +199,7 @@ class ResponseEngine {
                     ['text' => 'How does Sayog work?'],
                     ['text' => 'Why use Sayog?'],
                     ['text' => 'Platform Statistics'],
+                    ['text' => 'What services do you offer?'],
                 ];
                 break;
 
@@ -205,6 +208,7 @@ class ResponseEngine {
                     ['text' => 'What can I donate?'],
                     ['text' => 'Donation Guidelines'],
                     ['text' => 'My Donations'],
+                    ['text' => 'Food Safety Tips'],
                 ];
                 break;
 
@@ -214,6 +218,7 @@ class ResponseEngine {
                     ['text' => 'Create New Donation'],
                     ['text' => 'Donation Guidelines'],
                     ['text' => 'Available Food'],
+                    ['text' => 'How to track donations'],
                 ];
                 break;
 
@@ -222,6 +227,7 @@ class ResponseEngine {
                     ['text' => 'How to request food'],
                     ['text' => 'My Requests'],
                     ['text' => 'Donation Guidelines'],
+                    ['text' => 'Food Safety Tips'],
                 ];
                 break;
 
@@ -232,6 +238,7 @@ class ResponseEngine {
                     ['text' => 'Available Food'],
                     ['text' => 'Track My Requests'],
                     ['text' => 'Create Donation'],
+                    ['text' => 'How to coordinate pickup'],
                 ];
                 break;
 
@@ -240,14 +247,15 @@ class ResponseEngine {
                     ['text' => 'How to login'],
                     ['text' => 'What is Sayog?'],
                     ['text' => 'Available Food'],
+                    ['text' => 'Why should I register?'],
                 ];
                 break;
 
             case 'become_volunteer':
                 $suggestions = [
                     ['text' => 'Volunteer Documents Required'],
+                    ['text' => 'How delivery works'],
                     ['text' => 'Available Food'],
-                    ['text' => 'Platform Statistics'],
                 ];
                 break;
 
@@ -256,6 +264,7 @@ class ResponseEngine {
                     ['text' => 'Where is your office?'],
                     ['text' => 'What is Sayog?'],
                     ['text' => 'Platform Statistics'],
+                    ['text' => 'WhatsApp Support'],
                 ];
                 break;
 
@@ -272,6 +281,7 @@ class ResponseEngine {
                     ['text' => 'Pending Reviews'],
                     ['text' => 'Pending Volunteers'],
                     ['text' => 'Today\'s Registrations'],
+                    ['text' => 'Donation Status'],
                 ];
                 break;
 
@@ -283,11 +293,161 @@ class ResponseEngine {
                 ];
                 break;
 
+            // ── NEW INTENT SUGGESTIONS ──
+            case 'certificate_info':
+                $suggestions = [
+                    ['text' => 'How to get certificate'],
+                    ['text' => 'My Donations'],
+                    ['text' => 'Create New Donation'],
+                ];
+                break;
+
+            case 'rating_system':
+                $suggestions = [
+                    ['text' => 'How to rate someone'],
+                    ['text' => 'My Donations'],
+                    ['text' => 'Available Food'],
+                ];
+                break;
+
+            case 'notifications':
+                $suggestions = [
+                    ['text' => 'My Donations'],
+                    ['text' => 'My Requests'],
+                    ['text' => 'Available Food'],
+                ];
+                break;
+
+            case 'account_settings':
+            case 'change_password':
+                $suggestions = [
+                    ['text' => 'How to login'],
+                    ['text' => 'My Donations'],
+                    ['text' => 'Contact Support'],
+                ];
+                break;
+
+            case 'food_safety':
+                $suggestions = [
+                    ['text' => 'Donation Guidelines'],
+                    ['text' => 'What can I donate?'],
+                    ['text' => 'Available Food'],
+                ];
+                break;
+
+            case 'otp_verification':
+                $suggestions = [
+                    ['text' => 'How to register'],
+                    ['text' => 'How to login'],
+                    ['text' => 'Why should I register?'],
+                ];
+                break;
+
+            case 'privacy_policy':
+            case 'terms_of_service':
+                $suggestions = [
+                    ['text' => 'What is Sayog?'],
+                    ['text' => 'How to donate food'],
+                    ['text' => 'Contact Support'],
+                ];
+                break;
+
+            case 'pickup_process':
+                $suggestions = [
+                    ['text' => 'How to request food'],
+                    ['text' => 'My Requests'],
+                    ['text' => 'How volunteer delivery works'],
+                ];
+                break;
+
+            case 'expiry_management':
+                $suggestions = [
+                    ['text' => 'Donation Guidelines'],
+                    ['text' => 'How to donate food'],
+                    ['text' => 'Food Safety Tips'],
+                ];
+                break;
+
+            case 'how_to_track':
+                $suggestions = [
+                    ['text' => 'My Donations'],
+                    ['text' => 'My Requests'],
+                    ['text' => 'Available Food'],
+                ];
+                break;
+
+            case 'ngo_partnership':
+                $suggestions = [
+                    ['text' => 'How to donate food'],
+                    ['text' => 'Platform Statistics'],
+                    ['text' => 'Contact Info'],
+                ];
+                break;
+
+            case 'cancel_donation':
+            case 'cancel_request':
+                $suggestions = [
+                    ['text' => 'My Donations'],
+                    ['text' => 'My Requests'],
+                    ['text' => 'Create New Donation'],
+                ];
+                break;
+
+            case 'report_issue':
+                $suggestions = [
+                    ['text' => 'Contact Support'],
+                    ['text' => 'What is Sayog?'],
+                    ['text' => 'How to donate food'],
+                ];
+                break;
+
+            case 'benefits_registration':
+                $suggestions = [
+                    ['text' => 'How to register'],
+                    ['text' => 'How to donate food'],
+                    ['text' => 'Available Food'],
+                ];
+                break;
+
+            case 'whatsapp_integration':
+                $suggestions = [
+                    ['text' => 'Contact Info'],
+                    ['text' => 'What is Sayog?'],
+                    ['text' => 'Platform Statistics'],
+                ];
+                break;
+
+            case 'language_support':
+                $suggestions = [
+                    ['text' => 'What is Sayog?'],
+                    ['text' => 'How to donate food'],
+                    ['text' => 'Platform Statistics'],
+                ];
+                break;
+
+            case 'mobile_access':
+                $suggestions = [
+                    ['text' => 'What is Sayog?'],
+                    ['text' => 'How to donate food'],
+                    ['text' => 'Available Food'],
+                ];
+                break;
+
+            case 'volunteer_delivery':
+            case 'volunteer_deliveries':
+                $suggestions = [
+                    ['text' => 'Become a Volunteer'],
+                    ['text' => 'Volunteer Documents'],
+                    ['text' => 'Available Food'],
+                ];
+                break;
+
             default:
                 $suggestions = [
                     ['text' => 'What is Sayog?'],
                     ['text' => 'How to donate food'],
                     ['text' => 'Platform Statistics'],
+                    ['text' => 'Help'],
                 ];
         }
 
@@ -325,6 +485,14 @@ class ResponseEngine {
             );
         }
 
+        // Check for positive affirmations
+        if (preg_match('/\b(great|awesome|perfect|nice|good|excellent|amazing|wonderful)\b/i', $message)) {
+            return chatbot_json_response(
+                "I'm glad you think so! 😊 Is there anything else I can help you with?",
+                $this->get_suggestions_for_intent('help', $role, $page)
+            );
+        }
+
         // Page-specific contextual help
         if ($page === 'donations' || $page === 'donation') {
             return chatbot_json_response(
@@ -332,63 +500,107 @@ class ResponseEngine {
                 [
                     ['text' => 'How to request food'],
                     ['text' => 'Donation Guidelines'],
-                    ['text' => 'What is Sayog?'],
+                    ['text' => 'Food Safety Tips'],
                 ]
             );
         }
 
         if ($page === 'login') {
             return chatbot_json_response(
-                chatbot_format_message("Welcome to the **Login Page**! 🔐\n\nEnter your registered email and password to access your dashboard.\n\n**Don't have an account yet?** 👉 <a href='register.php' style='color:#059669;font-weight:600;'>Sign Up here</a>"),
+                chatbot_format_message("Welcome to the **Login Page**! 🔐\n\nEnter your registered email and password to access your dashboard.\n\n**Forgot your password?** Contact us via the support page — we'll help you reset it.\n\n**Don't have an account yet?** 👉 <a href='register.php' style='color:#059669;font-weight:600;'>Sign Up here</a>"),
                 [
                     ['text' => 'How to register'],
                     ['text' => 'I forgot my password'],
-                    ['text' => 'What is Sayog?'],
+                    ['text' => 'OTP verification'],
                 ]
             );
         }
 
         if ($page === 'register') {
             return chatbot_json_response(
-                chatbot_format_message("Welcome to the **Registration Page**! 🎉\n\nCreating an account is free and easy. Just fill in your:\n- Full Name\n- Email Address\n- Address\n- Nepal Phone Number\n- Strong Password\n\nThen verify your email via OTP and you're all set!"),
+                chatbot_format_message("Welcome to the **Registration Page**! 🎉\n\nCreating an account is free and easy. Just fill in your:\n- Full Name\n- Email Address\n- Address\n- Nepal Phone Number\n- Strong Password (8+ characters)\n\nThen verify your email via OTP and you're all set!\n\n👉 Already have an account? <a href='login.php' style='color:#059669;font-weight:600;'>Login here</a>"),
                 [
-                    ['text' => 'Why register?'],
+                    ['text' => 'Why should I register?'],
+                    ['text' => 'How OTP verification works'],
                     ['text' => 'What is Sayog?'],
-                    ['text' => 'How to donate food'],
                 ]
             );
         }
 
         if ($page === 'about') {
             return chatbot_json_response(
-                chatbot_format_message("You're on the **About Us** page! 🏢\n\nSayog is a smart food donation and redistribution platform built to connect surplus food with communities in need across Nepal."),
+                chatbot_format_message("You're on the **About Us** page! 🏢\n\nSayog is a smart food donation and redistribution platform built to connect surplus food with communities in need across Nepal.\n\nWe believe no food should go to waste while people go hungry."),
                 [
                     ['text' => 'How does Sayog work?'],
                     ['text' => 'Platform Statistics'],
-                    ['text' => 'Why use Sayog?'],
+                    ['text' => 'What services do you offer?'],
                 ]
             );
         }
 
         if ($page === 'contact') {
             return chatbot_json_response(
-                chatbot_format_message("You're on the **Contact Page**! 📞\n\nYou can reach us via the contact form, email, or phone. Would you like to see our contact details?"),
+                chatbot_format_message("You're on the **Contact Page**! 📞\n\nYou can reach us via the contact form, email, phone, or WhatsApp. Would you like to see our contact details?"),
                 [
                     ['text' => 'Show contact info'],
                     ['text' => 'Office address'],
+                    ['text' => 'WhatsApp support'],
+                ]
+            );
+        }
+
+        if ($page === 'team') {
+            return chatbot_json_response(
+                chatbot_format_message("You're on the **Team Page**! 👥\n\nMeet the dedicated team of developers and designers who built Sayog, committed to reducing food waste and helping communities in Nepal."),
+                [
                     ['text' => 'What is Sayog?'],
+                    ['text' => 'Platform Statistics'],
+                    ['text' => 'How to donate food'],
+                ]
+            );
+        }
+
+        if ($page === 'volunteers') {
+            return chatbot_json_response(
+                chatbot_format_message("You're on the **Volunteers Page**! 🧑‍🤝‍🧑\n\nMeet our wonderful volunteers who help transport food from donors to receivers. Want to join them?"),
+                [
+                    ['text' => 'How to become a volunteer'],
+                    ['text' => 'Volunteer Documents'],
+                    ['text' => 'How delivery works'],
+                ]
+            );
+        }
+
+        if ($page === 'become-volunteer') {
+            return chatbot_json_response(
+                chatbot_format_message("Ready to become a **Sayog Volunteer**? 🎉\n\nFill in your personal details, upload the required documents, and submit your application. An admin will review and approve it!"),
+                [
+                    ['text' => 'Volunteer Documents Required'],
+                    ['text' => 'How delivery works'],
+                    ['text' => 'Available Food'],
                 ]
             );
         }
 
         if ($role !== 'guest' && $page === 'dashboard') {
             return chatbot_json_response(
-                chatbot_format_message("Welcome to your **Dashboard**, {$context['user_name']}! 👋\n\nHere you can:\n- 📝 **Create Donation** — Post food to donate\n- 🍽️ **Request Food** — Find available food\n- 📋 **Manage Donations** — Track your listings\n- 📋 **Manage Requests** — Track your requests\n- 🔔 **Notifications** — View updates\n- 👤 **Profile** — Edit your info\n\nHow can I help you today?"),
+                chatbot_format_message("Welcome to your **Dashboard**, {$context['user_name']}! 👋\n\nHere you can:\n- 📝 **Create Donation** — Post food to donate\n- 🍽️ **Request Food** — Find available food\n- 📋 **My Donations** — Track your listings\n- 📋 **My Requests** — Track your requests\n- 📜 **Certificates** — View your awards\n- 🔔 **Notifications** — View updates\n- 👤 **Profile** — Edit your info\n\nHow can I help you today?"),
                 [
                     ['text' => 'My Donations'],
                     ['text' => 'My Requests'],
                     ['text' => 'Available Food'],
-                    ['text' => 'Create Donation'],
+                    ['text' => 'My Certificates'],
+                ]
+            );
+        }
+
+        if ($page === 'verify-otp') {
+            return chatbot_json_response(
+                chatbot_format_message("You're on the **OTP Verification** page! 📧\n\nCheck your email for a 6-digit verification code and enter it here to activate your account. The code expires in 10 minutes."),
+                [
+                    ['text' => 'Did not receive OTP'],
+                    ['text' => 'How to register'],
+                    ['text' => 'What is Sayog?'],
                 ]
             );
         }

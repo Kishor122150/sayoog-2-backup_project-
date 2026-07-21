@@ -1,5 +1,5 @@
 <?php
-header('Location: donations.php');
+header('Location: /frontend/donations.php');
 exit;
 ?>
 <!DOCTYPE html>
@@ -14,13 +14,13 @@ exit;
 <body>
     <header class="site-header">
         <div class="site-branding">
-            <a href="index.php" class="site-logo"><i class="fa-solid fa-hand-holding-heart"></i> Sayog</a>
+            <a href="/frontend/index.php" class="site-logo"><i class="fa-solid fa-hand-holding-heart"></i> Sayog</a>
         </div>
         <nav class="site-nav">
-            <a href="index.php">Home</a>
+            <a href="/frontend/index.php">Home</a>
             <a href="products.php">Products</a>
-            <a href="about.php">About</a>
-            <a href="contact.php">Contact</a>
+            <a href="/frontend/about.php">About</a>
+            <a href="/frontend/contact.php">Contact</a>
             <a href="login.php">Login</a>
         </nav>
     </header>

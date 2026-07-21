@@ -163,11 +163,21 @@ class AIProvider {
         $prompt .= "You format your responses with appropriate line breaks for readability.\n\n";
 
         $prompt .= "## PLATFORM KNOWLEDGE\n";
-        $prompt .= "- Sayog connects people with surplus food to those who need it.\n";
-        $prompt .= "- Users can: donate food, request food, become volunteers, manage their listings.\n";
-        $prompt .= "- All food donations require admin approval before appearing publicly.\n";
-        $prompt .= "- Users register with email and Nepal phone numbers (98/97/96 format).\n";
-        $prompt .= "- The platform handles food listings, requests, notifications, ratings, and certificates.\n";
+        $prompt .= "- Sayog connects people with surplus food to those who need it — a smart food donation and redistribution platform in Nepal.\n";
+        $prompt .= "- Users can: donate food, request food, become volunteers, manage listings, track progress, earn certificates, rate each other.\n";
+        $prompt .= "- All food donations require admin approval (verification) before appearing publicly.\n";
+        $prompt .= "- Users register with email and Nepal phone numbers (98, 97, or 96 prefix format).\n";
+        $prompt .= "- The platform handles: food listings, requests, real-time notifications, ratings & reviews, certificates of appreciation, volunteer delivery coordination, WhatsApp integration, OTP verification.\n";
+        $prompt .= "- Donations have expiry times — after expiry they auto-cancel for food safety.\n";
+        $prompt .= "- Certificates of Appreciation are awarded to donors who complete donations.\n";
+        $prompt .= "- Users can rate each other (1-5 stars) after a completed transaction.\n";
+        $prompt .= "- Volunteers help transport food from donors to receivers who cannot pick up.\n";
+        $prompt .= "- India and Nepal phone format supported.\n";
+        $prompt .= "- Food safety: cooked food should be <4hrs old if unrefrigerated, all food must be edible and unexpired.\n";
+        $prompt .= "- Users can cancel donations or requests from their Dashboard.\n";
+        $prompt .= "- Notifications alert users about approvals, requests, expirations.\n";
+        $prompt .= "- The platform supports WhatsApp communication and multi-language (English + Nepali).\n";
+        $prompt .= "- NGOs and organizations can partner for bulk donations.\n";
         $prompt .= "- The office is in Kathmandu, Nepal. Contact: info@sayog.org.\n\n";
 
         $prompt .= "## USER CONTEXT\n";

@@ -199,6 +199,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
+    // ── VOLUNTEER DELIVERY ADMIN ASSIGN/UNASSIGN ──
+    if ($action === 'admin_assign_volunteer') {
+        $delivery_id = intval($_POST['delivery_id'] ?? 0);
+        $volunteer_user_id = intval($_POST['volunteer_user_id'] ?? 0);
+        if ($delivery_id > 0 && $volunteer_user_id > 0) {
+            if (admin_assign_volunteer_to_delivery($pdo, $delivery_id, $volunteer_user_id)) {
+                set_flash_message('success', 'Volunteer assigned to delivery successfully.');
+            } else {
+                $errors[] = 'Could not assign volunteer. The delivery may already be assigned.';
+            }
+        } else {
+            $errors[] = 'Invalid delivery or volunteer selected.';
+        }
+        redirect('admin.php?section=volunteer_deliveries&del_status=' . urlencode($_POST['del_status'] ?? ''));
+    }
+
+    if ($action === 'admin_unassign_volunteer') {
+        $delivery_id = intval($_POST['delivery_id'] ?? 0);
+        if ($delivery_id > 0) {
+            if (admin_unassign_volunteer_from_delivery($pdo, $delivery_id)) {
+                set_flash_message('info', 'Volunteer unassigned from delivery.');
+            } else {
+                $errors[] = 'Could not unassign volunteer.';
+            }
+        }
+        redirect('admin.php?section=volunteer_deliveries&del_status=' . urlencode($_POST['del_status'] ?? ''));
+    }
+
     // ── TEAM MEMBER ACTIONS ──
     if ($action === 'create_team_member' || $action === 'update_team_member') {
         $name = sanitize($_POST['name'] ?? '');
@@ -1403,10 +1431,302 @@ $cms_tab = sanitize($_GET['cms_tab'] ?? 'homepage');
             <!-- VOLUNTEER DELIVERIES SECTION   -->
             <!-- ============================== -->
             <?php elseif ($section === 'volunteer_deliveries'):
+                $analytics_view = sanitize($_GET['analytics_view'] ?? '');
+                // Only query deliveries list data when viewing deliveries, not analytics
                 $del_status = sanitize($_GET['del_status'] ?? '');
-                $deliveries = get_all_volunteer_deliveries($pdo, $del_status, 100);
-                $vol_activity = get_volunteer_activity_stats($pdo);
+                $deliveries = [];
+                $vol_activity = [];
+                if ($analytics_view !== 'matching') {
+                    $deliveries = get_all_volunteer_deliveries($pdo, $del_status, 100);
+                    $vol_activity = get_volunteer_activity_stats($pdo);
+                }
+                $matching_analytics = get_delivery_matching_analytics($pdo);
             ?>
+
+                <!-- Navigation Tabs: Deliveries | Analytics -->
+                <div class="cms-tabs" style="margin-bottom:24px;">
+                    <a href="admin.php?section=volunteer_deliveries" class="cms-tab <?php echo empty($analytics_view) ? 'active' : ''; ?>">
+                        <i class="fa-solid fa-list"></i> Deliveries
+                    </a>
+                    <a href="admin.php?section=volunteer_deliveries&analytics_view=matching" class="cms-tab <?php echo $analytics_view === 'matching' ? 'active' : ''; ?>">
+                        <i class="fa-solid fa-chart-line"></i> Matching Analytics
+                    </a>
+                </div>
+
+                <?php if ($analytics_view === 'matching'): ?>
+                <!-- ============ MATCHING ANALYTICS DASHBOARD ============ -->
+                <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+                <!-- Summary Stats Row -->
+                <div class="stats-grid" style="grid-template-columns:repeat(6,1fr);margin-bottom:24px;">
+                    <div class="stat-card">
+                        <div class="stat-card-icon blue"><i class="fa-solid fa-robot"></i></div>
+                        <div class="stat-card-body">
+                            <div class="stat-card-value"><?php echo (int)($matching_analytics['assignment_methods']['auto'] ?? 0); ?></div>
+                            <div class="stat-card-label">Auto-Assigned</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-card-icon green"><i class="fa-solid fa-hand-pointer"></i></div>
+                        <div class="stat-card-body">
+                            <div class="stat-card-value"><?php echo (int)($matching_analytics['assignment_methods']['manual_accept'] ?? 0); ?></div>
+                            <div class="stat-card-label">Manually Accepted</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-card-icon purple"><i class="fa-solid fa-user-gear"></i></div>
+                        <div class="stat-card-body">
+                            <div class="stat-card-value"><?php echo (int)($matching_analytics['assignment_methods']['admin_assign'] ?? 0); ?></div>
+                            <div class="stat-card-label">Admin Assigned</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-card-icon amber"><i class="fa-solid fa-clock"></i></div>
+                        <div class="stat-card-body">
+                            <div class="stat-card-value"><?php echo (float)($matching_analytics['response_times']['avg_response_mins'] ?? 0); ?>m</div>
+                            <div class="stat-card-label">Avg Response</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-card-icon red"><i class="fa-solid fa-gauge-high"></i></div>
+                        <div class="stat-card-body">
+                            <div class="stat-card-value"><?php echo (float)($matching_analytics['volunteer_utilization']['utilization_pct'] ?? 0); ?>%</div>
+                            <div class="stat-card-label">Utilization Rate</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-card-icon green"><i class="fa-solid fa-check-double"></i></div>
+                        <div class="stat-card-body">
+                            <div class="stat-card-value"><?php echo (float)($matching_analytics['completion']['completion_rate'] ?? 0); ?>%</div>
+                            <div class="stat-card-label">Completion Rate</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Charts Row: Assignment Methods & Response Times -->
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:24px;">
+                    <!-- Assignment Method Pie Chart -->
+                    <div class="admin-card">
+                        <div class="admin-card-header">
+                            <h3><i class="fa-solid fa-chart-pie"></i> Assignment Method Distribution</h3>
+                        </div>
+                        <div class="admin-card-body" style="padding:16px;">
+                            <canvas id="assignMethodChart" style="max-height:280px;"></canvas>
+                        </div>
+                    </div>
+                    <!-- Response Time by Method -->
+                    <div class="admin-card">
+                        <div class="admin-card-header">
+                            <h3><i class="fa-solid fa-gauge"></i> Average Response Time by Method (min)</h3>
+                        </div>
+                        <div class="admin-card-body" style="padding:16px;">
+                            <canvas id="responseTimeChart" style="max-height:280px;"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Charts Row: Daily Trends & Completion -->
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:24px;">
+                    <!-- 14-Day Trends Line Chart -->
+                    <div class="admin-card">
+                        <div class="admin-card-header">
+                            <h3><i class="fa-solid fa-chart-line"></i> Daily Delivery Trends (14 Days)</h3>
+                        </div>
+                        <div class="admin-card-body" style="padding:16px;">
+                            <canvas id="dailyTrendChart" style="max-height:260px;"></canvas>
+                        </div>
+                    </div>
+                    <!-- Delivery Status Metrics -->
+                    <div class="admin-card">
+                        <div class="admin-card-header">
+                            <h3><i class="fa-solid fa-gauge-simple"></i> Key Metrics</h3>
+                        </div>
+                        <div class="admin-card-body" style="padding:20px;">
+                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+                                <div style="background:var(--admin-bg-light);border-radius:10px;padding:14px;text-align:center;">
+                                    <div style="font-size:20px;font-weight:800;color:#059669;"><?php echo (int)($matching_analytics['volunteer_utilization']['available_now'] ?? 0); ?></div>
+                                    <div style="font-size:12px;color:var(--admin-text-muted);">Volunteers Available Now</div>
+                                </div>
+                                <div style="background:var(--admin-bg-light);border-radius:10px;padding:14px;text-align:center;">
+                                    <div style="font-size:20px;font-weight:800;color:#3b82f6;"><?php echo (int)($matching_analytics['volunteer_utilization']['total_volunteers'] ?? 0); ?></div>
+                                    <div style="font-size:12px;color:var(--admin-text-muted);">Total Active Volunteers</div>
+                                </div>
+                                <div style="background:var(--admin-bg-light);border-radius:10px;padding:14px;text-align:center;">
+                                    <div style="font-size:20px;font-weight:800;color:#8b5cf6;"><?php echo (float)($matching_analytics['avg_deliveries_per_volunteer']['avg_per_volunteer'] ?? 0); ?></div>
+                                    <div style="font-size:12px;color:var(--admin-text-muted);">Avg Deliveries/Volunteer</div>
+                                </div>
+                                <div style="background:var(--admin-bg-light);border-radius:10px;padding:14px;text-align:center;">
+                                    <div style="font-size:20px;font-weight:800;color:#f59e0b;"><?php echo (int)($matching_analytics['avg_deliveries_per_volunteer']['max_deliveries'] ?? 0); ?></div>
+                                    <div style="font-size:12px;color:var(--admin-text-muted);">Most Deliveries by One</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Top Volunteers Table -->
+                <div class="admin-card" style="margin-bottom:24px;">
+                    <div class="admin-card-header">
+                        <h3><i class="fa-solid fa-trophy"></i> Volunteer Performance Leaderboard</h3>
+                    </div>
+                    <div class="admin-card-body" style="padding:0;">
+                        <?php if (empty($matching_analytics['top_volunteers'])): ?>
+                            <div class="empty-state" style="padding:30px;"><p>No volunteer data available.</p></div>
+                        <?php else: ?>
+                        <div class="table-wrapper">
+                            <table class="modern-table">
+                                <thead>
+                                    <tr>
+                                        <th>#</th>
+                                        <th>Volunteer</th>
+                                        <th>Rating</th>
+                                        <th>Deliveries</th>
+                                        <th>Points</th>
+                                        <th>Avg Time</th>
+                                        <th>Vehicle</th>
+                                        <th>Radius</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <?php $rank = 1; foreach ($matching_analytics['top_volunteers'] as $tv): ?>
+                                    <tr>
+                                        <td><span class="badge badge-<?php echo $rank === 1 ? 'success' : ($rank === 2 ? 'info' : ($rank === 3 ? 'warning' : 'neutral')); ?>"><?php echo $rank++; ?></span></td>
+                                        <td><strong><?php echo htmlspecialchars($tv['volunteer_name'] ?? 'N/A'); ?></strong></td>
+                                        <td><?php echo $tv['rating'] ? number_format($tv['rating'],1).' ⭐' : '—'; ?></td>
+                                        <td><strong><?php echo (int)$tv['delivered_count']; ?></strong> / <?php echo (int)$tv['total_assigned']; ?></td>
+                                        <td><?php echo (int)$tv['community_points']; ?></td>
+                                        <td><?php echo $tv['avg_delivery_time'] ? (float)$tv['avg_delivery_time'].'m' : '—'; ?></td>
+                                        <td><span class="badge badge-info"><?php echo ucfirst($tv['vehicle_type'] ?? 'N/A'); ?></span></td>
+                                        <td><?php echo (int)$tv['delivery_radius']; ?>km</td>
+                                        <td><span style="color:<?php echo $tv['online_status']==='available'?'#059669':($tv['online_status']==='busy'?'#f59e0b':'#9ca3af'); ?>;">● <?php echo ucfirst($tv['online_status'] ?? 'offline'); ?></span></td>
+                                    </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                        <?php endif; ?>
+                    </div>
+                </div>
+
+                <!-- Chart Initialization Script (with retry for Chart.js loading) -->
+                <script>
+                (function() {
+                    function initCharts() {
+                        if (typeof Chart === 'undefined') {
+                            // Retry after 500ms if Chart.js hasn't loaded yet
+                            setTimeout(initCharts, 500);
+                            return;
+                        }
+
+                    // 1. Assignment Method Pie Chart
+                    var methodCtx = document.getElementById('assignMethodChart');
+                    if (methodCtx) {
+                        new Chart(methodCtx, {
+                            type: 'doughnut',
+                            data: {
+                                labels: ['Auto-Assigned', 'Manual Accept', 'Admin Assign', 'Reassigned'],
+                                datasets: [{
+                                    data: [
+                                        <?php echo (int)($matching_analytics['assignment_methods']['auto'] ?? 0); ?>,
+                                        <?php echo (int)($matching_analytics['assignment_methods']['manual_accept'] ?? 0); ?>,
+                                        <?php echo (int)($matching_analytics['assignment_methods']['admin_assign'] ?? 0); ?>,
+                                        <?php echo (int)($matching_analytics['assignment_methods']['reassigned'] ?? 0); ?>
+                                    ],
+                                    backgroundColor: ['#059669', '#3b82f6', '#8b5cf6', '#f59e0b'],
+                                    borderWidth: 0
+                                }]
+                            },
+                            options: {
+                                responsive: true,
+                                plugins: {
+                                    legend: { position: 'bottom', labels: { padding: 16, usePointStyle: true, font: { size: 12 } } }
+                                }
+                            }
+                        });
+                    }
+
+                    // 2. Response Time by Method Bar Chart
+                    var respCtx = document.getElementById('responseTimeChart');
+                    if (respCtx) {
+                        new Chart(respCtx, {
+                            type: 'bar',
+                            data: {
+                                labels: ['Auto', 'Manual', 'Admin Assign'],
+                                datasets: [{
+                                    label: 'Avg Response (min)',
+                                    data: [
+                                        <?php echo (float)($matching_analytics['response_by_method']['auto'] ?? 0); ?>,
+                                        <?php echo (float)($matching_analytics['response_by_method']['manual_accept'] ?? 0); ?>,
+                                        <?php echo (float)($matching_analytics['response_by_method']['admin_assign'] ?? 0); ?>
+                                    ],
+                                    backgroundColor: ['#059669', '#3b82f6', '#8b5cf6'],
+                                    borderRadius: 6
+                                }]
+                            },
+                            options: {
+                                responsive: true,
+                                scales: {
+                                    y: { beginAtZero: true, title: { display: true, text: 'Minutes' } }
+                                },
+                                plugins: {
+                                    legend: { display: false }
+                                }
+                            }
+                        });
+                    }
+
+                    // 3. Daily Trends Line Chart
+                    var trendCtx = document.getElementById('dailyTrendChart');
+                    if (trendCtx) {
+                        var dates = [<?php 
+                            $dateLabels = [];
+                            $createdData = [];
+                            $deliveredData = [];
+                            $autoData = [];
+                            foreach ($matching_analytics['daily_trends'] as $day) {
+                                $dateLabels[] = date('d M', strtotime($day['date']));
+                                $createdData[] = (int)$day['total_created'];
+                                $deliveredData[] = (int)$day['delivered'];
+                                $autoData[] = (int)$day['auto_assigned'];
+                            }
+                            echo "'" . implode("','", $dateLabels) . "'";
+                        ?>];
+                        new Chart(trendCtx, {
+                            type: 'line',
+                            data: {
+                                labels: dates,
+                                datasets: [
+                                    { label: 'Created', data: [<?php echo implode(',', $createdData); ?>], borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.1)', fill: true, tension: 0.3 },
+                                    { label: 'Delivered', data: [<?php echo implode(',', $deliveredData); ?>], borderColor: '#059669', backgroundColor: 'rgba(5,150,105,0.1)', fill: true, tension: 0.3 },
+                                    { label: 'Auto-Assigned', data: [<?php echo implode(',', $autoData); ?>], borderColor: '#8b5cf6', backgroundColor: 'rgba(139,92,246,0.1)', fill: true, tension: 0.3 }
+                                ]
+                            },
+                            options: {
+                                responsive: true,
+                                interaction: { intersect: false, mode: 'index' },
+                                plugins: {
+                                    legend: { position: 'bottom', labels: { usePointStyle: true, font: { size: 11 } } }
+                                },
+                                scales: {
+                                    y: { beginAtZero: true, ticks: { stepSize: 1 } }
+                                }
+                            }
+                        });
+                    }
+                    })();
+                    
+                    // Start chart initialization
+                    if (document.readyState === 'loading') {
+                        document.addEventListener('DOMContentLoaded', initCharts);
+                    } else {
+                        initCharts();
+                    }
+                })();
+                </script>
+
+                <?php else: ?>
+                <!-- ============ DELIVERIES LIST VIEW (existing) ============ -->
                 <div class="section-header">
                     <div>
                         <h1><i class="fa-solid fa-truck-fast"></i> Volunteer Deliveries</h1>
@@ -1489,6 +1809,7 @@ $cms_tab = sanitize($_GET['cms_tab'] ?? 'homepage');
                                         <th>Status</th>
                                         <th>Timeline</th>
                                         <th>Created</th>
+                                        <th>Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -1535,6 +1856,42 @@ $cms_tab = sanitize($_GET['cms_tab'] ?? 'homepage');
                                             </div>
                                         </td>
                                         <td style="white-space:nowrap;font-size:13px;"><?php echo date('d M Y',strtotime($d['created_at'])); ?></td>
+                                        <td>
+                                            <div class="table-actions" style="display:flex;flex-direction:column;gap:4px;min-width:120px;">
+                                                <?php if ($d['status'] === 'assigned' && empty($d['volunteer_name'])): ?>
+                                                    <!-- Assign volunteer form -->
+                                                    <form method="POST" action="admin.php?section=volunteer_deliveries" style="display:flex;gap:4px;flex-wrap:wrap;">
+                                                        <input type="hidden" name="action" value="admin_assign_volunteer">
+                                                        <input type="hidden" name="delivery_id" value="<?php echo (int)$d['id']; ?>">
+                                                        <input type="hidden" name="del_status" value="<?php echo htmlspecialchars($del_status); ?>">
+                                                        <select name="volunteer_user_id" class="form-control" style="font-size:11px;padding:4px 8px;width:100%;min-width:130px;" required>
+                                                            <option value="">— Select —</option>
+                                                            <?php
+                                                            $availVols = $pdo->query("SELECT v.user_id, v.full_name FROM volunteers v WHERE v.status = 'approved' AND v.online_status != 'offline' ORDER BY v.rating DESC, v.completed_deliveries DESC LIMIT 20");
+                                                            while ($av = $availVols->fetch()):
+                                                            ?>
+                                                                <option value="<?php echo (int)$av['user_id']; ?>"><?php echo htmlspecialchars($av['full_name']); ?></option>
+                                                            <?php endwhile; ?>
+                                                        </select>
+                                                        <button type="submit" class="btn btn-sm btn-success" style="font-size:10px;padding:4px 8px;" title="Assign this volunteer">
+                                                            <i class="fa-solid fa-user-plus"></i> Assign
+                                                        </button>
+                                                    </form>
+                                                <?php elseif (in_array($d['status'], ['accepted', 'picked_up', 'in_transit']) && !empty($d['volunteer_name'])): ?>
+                                                    <!-- Unassign volunteer form -->
+                                                    <form method="POST" action="admin.php?section=volunteer_deliveries" style="display:inline;" onsubmit="return confirm('Unassign this volunteer? The delivery will become available again.');">
+                                                        <input type="hidden" name="action" value="admin_unassign_volunteer">
+                                                        <input type="hidden" name="delivery_id" value="<?php echo (int)$d['id']; ?>">
+                                                        <input type="hidden" name="del_status" value="<?php echo htmlspecialchars($del_status); ?>">
+                                                        <button type="submit" class="btn btn-sm btn-secondary" style="font-size:10px;padding:4px 8px;" title="Unassign volunteer">
+                                                            <i class="fa-solid fa-user-minus"></i> Unassign
+                                                        </button>
+                                                    </form>
+                                                <?php else: ?>
+                                                    <span style="font-size:11px;color:#9ca3af;">—</span>
+                                                <?php endif; ?>
+                                            </div>
+                                        </td>
                                     </tr>
                                     <?php endforeach; ?>
                                 </tbody>
@@ -1623,6 +1980,7 @@ $cms_tab = sanitize($_GET['cms_tab'] ?? 'homepage');
                         </div>
                     </div>
                 </div>
+            <?php endif; ?>
 
             <!-- ============================== -->
             <!-- TEAM SECTION                 -->

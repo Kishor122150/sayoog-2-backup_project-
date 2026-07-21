@@ -775,6 +775,23 @@ try {
         }
     }
 
+    // Action: Volunteer Rejects/Declines Delivery
+    if ($action === 'reject_volunteer_delivery') {
+        $delivery_id = intval($_POST['delivery_id'] ?? 0);
+        $reason = sanitize($_POST['rejection_reason'] ?? '');
+        if ($delivery_id <= 0) {
+            $errors[] = 'Invalid delivery request.';
+        }
+        if (empty($errors)) {
+            if (reject_volunteer_delivery($pdo, $delivery_id, $user_id, $reason)) {
+                set_flash_message('info', 'Delivery declined. The system will try to find another volunteer.');
+                redirect('dashboard.php?page=volunteer');
+            } else {
+                $errors[] = 'Could not decline delivery. It may have already been updated.';
+            }
+        }
+    }
+
     // Action: Update Volunteer Online Status
     if ($action === 'update_volunteer_status') {
         $online_status = sanitize($_POST['online_status'] ?? '');
@@ -1245,7 +1262,7 @@ $flash = get_flash_message();
                                     <?php endif; ?>
                                 </div>
                                 <div class="rec-card-footer">
-                                    <a href="donation.php?id=<?php echo $d['id']; ?>" class="btn btn-primary">
+                                    <a href="/frontend/donation.php?id=<?php echo $d['id']; ?>" class="btn btn-primary">
                                         <i class="fa-solid fa-eye"></i> View
                                     </a>
                                     <?php
@@ -2534,6 +2551,135 @@ $flash = get_flash_message();
                                                 <i class="fa-solid fa-circle-exclamation" style="color: var(--status-requested);"></i> Received <strong><?php echo $don['pending_requests_count']; ?></strong> request(s). Please review in <a href="dashboard.php?page=manage-donation" style="color: var(--primary); font-weight:600; text-decoration:none;">Manage Donation</a>.
                                             <?php elseif ($don['status'] === 'accepted'): ?>
                                                 <i class="fa-solid fa-truck" style="color: var(--secondary);"></i> Approved request from <strong><?php echo htmlspecialchars($don['approved_consumer_name']); ?></strong>. Awaiting collection.
+                                                <?php
+                                                // Check if volunteer delivery is active for this donation
+                                                $vDelStmt = $pdo->prepare("SELECT vd.id, vd.volunteer_user_id, vd.status AS del_status, vu.name AS vol_name FROM volunteer_deliveries vd LEFT JOIN users vu ON vd.volunteer_user_id = vu.id WHERE vd.donation_id = ? AND vd.status IN ('accepted', 'picked_up', 'in_transit') LIMIT 1");
+                                                $vDelStmt->execute([$don['id']]);
+                                                $vDel = $vDelStmt->fetch();
+                                                if ($vDel && !empty($vDel['volunteer_user_id'])): 
+                                                ?>
+                                                    <div class="volunteer-tracking-card" style="margin-top:12px;background:linear-gradient(135deg,#f0fdf4,#ecfdf5);border:1px solid #a7f3d0;border-radius:12px;padding:14px;">
+                                                        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+                                                            <div style="width:36px;height:36px;background:#059669;border-radius:50%;display:flex;align-items:center;justify-content:center;">
+                                                                <i class="fa-solid fa-person-running" style="color:#fff;font-size:14px;"></i>
+                                                            </div>
+                                                            <div>
+                                                                <div style="font-size:13px;font-weight:700;color:#0f172a;"><?php echo htmlspecialchars($vDel['vol_name'] ?? 'Volunteer'); ?></div>
+                                                                <div style="font-size:11px;color:#6b7280;"><?php echo ucfirst(str_replace('_', ' ', $vDel['del_status'])); ?></div>
+                                                            </div>
+                                                            <span class="vol-track-badge" style="margin-left:auto;padding:3px 10px;background:rgba(5,150,105,0.1);color:#059669;border-radius:999px;font-size:11px;font-weight:600;">
+                                                                <i class="fa-solid fa-location-dot"></i> Live
+                                                            </span>
+                                                        </div>
+                                                        <div id="donorTrackMap_<?php echo (int)$don['id']; ?>" style="width:100%;height:180px;border-radius:8px;overflow:hidden;background:#f9fafb;"></div>
+                                                        <div style="margin-top:8px;font-size:11px;color:#6b7280;text-align:center;">
+                                                            <span id="donorTrackStatus_<?php echo (int)$don['id']; ?>">Loading volunteer location...</span>
+                                                        </div>
+                                                    </div>
+                                                    <script>
+                                                    (function() {
+                                                        var donationId = <?php echo (int)$don['id']; ?>;
+                                                        var deliveryId = <?php echo (int)$vDel['id']; ?>;
+                                                        var mapEl = document.getElementById('donorTrackMap_' + donationId);
+                                                        var statusEl = document.getElementById('donorTrackStatus_' + donationId);
+                                                        var trackMap = null, trackMarker = null, pickupMarker = null;
+                                                        
+                                                        function loadTrackingMap() {
+                                                            if (typeof L === 'undefined') {
+                                                                var css = document.createElement('link');
+                                                                css.rel = 'stylesheet';
+                                                                css.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+                                                                document.head.appendChild(css);
+                                                                var script = document.createElement('script');
+                                                                script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+                                                                script.onload = function() { fetchLocation(); };
+                                                                document.head.appendChild(script);
+                                                                return;
+                                                            }
+                                                            fetchLocation();
+                                                        }
+                                                        
+                                                        function fetchLocation() {
+                                                            fetch('tracking_api.php?action=get_location&delivery_id=' + deliveryId)
+                                                                .then(function(r) { return r.json(); })
+                                                                .then(function(data) {
+                                                                    if (data.success && data.sharing && data.location) {
+                                                                        var lat = data.location.lat;
+                                                                        var lng = data.location.lng;
+                                                                        
+                                                                        if (!trackMap) {
+                                                                            var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+                                                                            trackMap = L.map(mapEl, {
+                                                                                center: [lat, lng],
+                                                                                zoom: 14,
+                                                                                zoomControl: false
+                                                                            });
+                                                                            L.tileLayer(isDark ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png' : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                                                                                attribution: '&copy; OSM',
+                                                                                maxZoom: 18
+                                                                            }).addTo(trackMap);
+                                                                            L.control.zoom({position:'topright'}).addTo(trackMap);
+                                                                            setTimeout(function() { trackMap.invalidateSize(); }, 200);
+                                                                        }
+                                                                        
+                                                                        // Volunteer marker
+                                                                        var volIcon = L.divIcon({
+                                                                            className: '',
+                                                                            html: '<div style="width:14px;height:14px;background:#059669;border:2px solid #fff;border-radius:50%;box-shadow:0 0 0 3px rgba(5,150,105,0.3);"></div>',
+                                                                            iconSize: [14, 14],
+                                                                            iconAnchor: [7, 7]
+                                                                        });
+                                                                        if (trackMarker) {
+                                                                            trackMarker.setLatLng([lat, lng]);
+                                                                        } else {
+                                                                            trackMarker = L.marker([lat, lng], { icon: volIcon }).addTo(trackMap);
+                                                                            trackMarker.bindPopup('<strong>' + data.volunteer_name + '</strong><br>Vehicle: ' + (data.vehicle_type || 'N/A') + '<br>Status: ' + data.delivery_status);
+                                                                        }
+                                                                        
+                                                                        // Pickup location marker (only once)
+                                                                        if (!pickupMarker && data.pickup && data.pickup.lat && data.pickup.lng) {
+                                                                            var pickupIcon = L.divIcon({
+                                                                                className: '',
+                                                                                html: '<div style="width:32px;height:32px;background:#f59e0b;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.2);"><i class="fa-solid fa-utensils" style="color:#fff;font-size:12px;"></i></div>',
+                                                                                iconSize: [32, 32],
+                                                                                iconAnchor: [16, 16]
+                                                                            });
+                                                                            pickupMarker = L.marker([parseFloat(data.pickup.lat), parseFloat(data.pickup.lng)], { icon: pickupIcon }).addTo(trackMap);
+                                                                            pickupMarker.bindPopup('<strong>Pickup Location</strong><br>' + data.pickup.address);
+                                                                        }
+                                                                        
+                                                                        // Fit bounds to show both markers
+                                                                        if (trackMarker) {
+                                                                            var group = L.featureGroup([trackMarker]);
+                                                                            if (pickupMarker) group.addLayer(pickupMarker);
+                                                                            try { trackMap.fitBounds(group.getBounds().pad(0.3), {maxZoom: 15}); } catch(e) {}
+                                                                        }
+                                                                        
+                                                                        statusEl.innerHTML = '<i class="fa-solid fa-check-circle" style="color:#059669;"></i> ' + data.volunteer_name + ' is at ' + data.location.lat.toFixed(4) + ', ' + data.location.lng.toFixed(4) + ' <span style="color:#9ca3af;">| updated ' + timeAgo(data.location.updated_at) + '</span>';
+                                                                    } else {
+                                                                        statusEl.innerHTML = '<i class="fa-solid fa-circle"></i> ' + (data.message || 'Waiting for volunteer location...');
+                                                                    }
+                                                                })
+                                                                .catch(function() {
+                                                                    statusEl.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> Could not fetch location';
+                                                                });
+                                                        }
+                                                        
+                                                        function timeAgo(dateStr) {
+                                                            var now = new Date();
+                                                            var date = new Date(dateStr.replace(' ', 'T') + (dateStr.includes('Z') ? '' : 'Z'));
+                                                            var secs = Math.floor((now - date) / 1000);
+                                                            if (secs < 5) return 'just now';
+                                                            if (secs < 60) return secs + 's ago';
+                                                            var mins = Math.floor(secs / 60);
+                                                            return mins + 'm ago';
+                                                        }
+                                                        
+                                                        loadTrackingMap();
+                                                        setInterval(fetchLocation, 10000);
+                                                    })();
+                                                    </script>
+                                                <?php endif; ?>
                                             <?php elseif ($don['status'] === 'completed'): ?>
                                                 <i class="fa-solid fa-heart" style="color: var(--primary);"></i> Completed successfully! The food was claimed and picked up.
                                             <?php endif; ?>
@@ -2721,11 +2867,164 @@ $flash = get_flash_message();
                         <span style="color:#059669;font-weight:600;"><i class="fa-solid fa-truck"></i> Volunteer delivery requested</span>
                         <span style="display:block;margin-top:4px;font-size:12px;color:#4b5563;">A volunteer will be assigned soon to pick up and deliver this donation.</span>
                     </div>
-                <?php elseif ($vd && in_array($vd['status'], ['accepted','picked_up','in_transit'])): ?>
-                    <div style="margin-top:12px;padding:12px 16px;background:#ecfdf5;border:1px solid #6ee7b7;border-radius:12px;">
-                        <span style="color:#059669;font-weight:600;"><i class="fa-solid fa-truck-fast"></i> Volunteer is on the way!</span>
-                        <span style="display:block;margin-top:4px;font-size:12px;color:#4b5563;">Status: <?php echo ucfirst(str_replace('_',' ',$vd['status'])); ?></span>
+                <?php elseif ($vd && in_array($vd['status'], ['accepted','picked_up','in_transit'])): 
+                    $vDetailsStmt = $pdo->prepare("SELECT vu.name AS vol_name, vol.vehicle_type, vol.phone FROM volunteer_deliveries vd LEFT JOIN users vu ON vd.volunteer_user_id = vu.id LEFT JOIN volunteers vol ON vd.volunteer_user_id = vol.user_id WHERE vd.id = ?");
+                    $vDetailsStmt->execute([$vd['id']]);
+                    $vDetails = $vDetailsStmt->fetch();
+                    // Get donation location for placeholder map
+                    $pStmt = $pdo->prepare("SELECT pickup_address, latitude, longitude FROM donations WHERE id = ?");
+                    $pStmt->execute([$req['donation_id']]);
+                    $pDon = $pStmt->fetch();
+                ?>
+                    <div style="margin-top:12px;padding:14px;background:#ecfdf5;border:1px solid #6ee7b7;border-radius:12px;">
+                        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+                            <div style="width:36px;height:36px;background:#059669;border-radius:50%;display:flex;align-items:center;justify-content:center;">
+                                <i class="fa-solid fa-person-running" style="color:#fff;font-size:14px;"></i>
+                            </div>
+                            <div style="flex:1;">
+                                <span style="color:#059669;font-weight:700;"><i class="fa-solid fa-truck-fast"></i> Volunteer is on the way!</span>
+                                <?php if (!empty($vDetails['vol_name'])): ?>
+                                    <span style="display:block;font-size:13px;font-weight:600;color:#0f172a;"><?php echo htmlspecialchars($vDetails['vol_name']); ?></span>
+                                    <span style="display:block;font-size:11px;color:#6b7280;">
+                                        <?php echo ucfirst(str_replace('_',' ',$vd['status'])); ?>
+                                        <?php if (!empty($vDetails['vehicle_type'])): ?> | <?php echo ucfirst($vDetails['vehicle_type']); ?><?php endif; ?>
+                                    </span>
+                                <?php endif; ?>
+                            </div>
+                            <span style="padding:3px 10px;background:rgba(5,150,105,0.1);color:#059669;border-radius:999px;font-size:11px;font-weight:600;">
+                                <i class="fa-solid fa-location-dot"></i> Live
+                            </span>
+                        </div>
+                        
+                        <!-- Live Volunteer Tracking Map for Consumer -->
+                        <div id="consumerTrackMap_<?php echo (int)$req['donation_id']; ?>" style="width:100%;height:200px;border-radius:8px;overflow:hidden;background:#f9fafb;margin-top:8px;"></div>
+                        <div style="margin-top:6px;font-size:11px;color:#6b7280;text-align:center;">
+                            <span id="consumerTrackStatus_<?php echo (int)$req['donation_id']; ?>">Loading volunteer location...</span>
+                        </div>
+                        
+                        <?php if (!empty($vDetails['vol_name'])): ?>
+                        <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">
+                            <?php if (!empty($vDetails['phone'])): ?>
+                                <a href="<?php echo get_whatsapp_link($vDetails['phone'], 'Hello ' . $vDetails['vol_name'] . ', I am waiting for the food delivery from Sayog.'); ?>" target="_blank" class="btn btn-whatsapp btn-whatsapp-sm" style="font-size:11px;padding:6px 12px;">
+                                    <i class="fa-brands fa-whatsapp"></i> Contact Volunteer
+                                </a>
+                            <?php endif; ?>
+                            <a href="#" onclick="document.getElementById('consumerTrackMap_<?php echo (int)$req['donation_id']; ?>').scrollIntoView({behavior:'smooth'});return false;" style="font-size:11px;color:#059669;font-weight:600;text-decoration:none;padding:6px 12px;background:rgba(5,150,105,0.06);border-radius:8px;">
+                                <i class="fa-solid fa-map"></i> View on Map
+                            </a>
+                        </div>
+                        <?php endif; ?>
                     </div>
+                    
+                    <script>
+                    (function() {
+                        var donationId = <?php echo (int)$req['donation_id']; ?>;
+                        var deliveryId = <?php echo (int)$vd['id']; ?>;
+                        var mapEl = document.getElementById('consumerTrackMap_' + donationId);
+                        var statusEl = document.getElementById('consumerTrackStatus_' + donationId);
+                        var trackMap = null, trackMarker = null, pickupMarker = null;
+                        
+                        function loadConsumerTrackingMap() {
+                            if (typeof L === 'undefined') {
+                                var css = document.createElement('link');
+                                css.rel = 'stylesheet';
+                                css.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+                                document.head.appendChild(css);
+                                var script = document.createElement('script');
+                                script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+                                script.onload = function() { fetchConsumerLocation(); };
+                                document.head.appendChild(script);
+                                return;
+                            }
+                            fetchConsumerLocation();
+                        }
+                        
+                        function fetchConsumerLocation() {
+                            fetch('tracking_api.php?action=get_location&delivery_id=' + deliveryId)
+                                .then(function(r) { return r.json(); })
+                                .then(function(data) {
+                                    if (data.success && data.sharing && data.location) {
+                                        var lat = data.location.lat;
+                                        var lng = data.location.lng;
+                                        
+                                        if (!trackMap) {
+                                            var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+                                            trackMap = L.map(mapEl, {
+                                                center: [lat, lng],
+                                                zoom: 14,
+                                                zoomControl: false
+                                            });
+                                            L.tileLayer(isDark ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png' : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                                                attribution: '&copy; OSM',
+                                                maxZoom: 18
+                                            }).addTo(trackMap);
+                                            L.control.zoom({position:'topright'}).addTo(trackMap);
+                                            setTimeout(function() { trackMap.invalidateSize(); }, 200);
+                                        }
+                                        
+                                        var volIcon = L.divIcon({
+                                            className: '',
+                                            html: '<div style="width:14px;height:14px;background:#059669;border:2px solid #fff;border-radius:50%;box-shadow:0 0 0 3px rgba(5,150,105,0.3);"></div>',
+                                            iconSize: [14, 14],
+                                            iconAnchor: [7, 7]
+                                        });
+                                        if (trackMarker) {
+                                            trackMarker.setLatLng([lat, lng]);
+                                        } else {
+                                            trackMarker = L.marker([lat, lng], { icon: volIcon }).addTo(trackMap);
+                                            trackMarker.bindPopup('<strong>' + (data.volunteer_name || 'Volunteer') + '</strong><br>Status: ' + (data.delivery_status || 'unknown'));
+                                        }
+                                        
+                                        if (!pickupMarker && data.pickup && data.pickup.lat && data.pickup.lng) {
+                                            var pickupIcon = L.divIcon({
+                                                className: '',
+                                                html: '<div style="width:32px;height:32px;background:#f59e0b;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.2);"><i class="fa-solid fa-utensils" style="color:#fff;font-size:12px;"></i></div>',
+                                                iconSize: [32, 32],
+                                                iconAnchor: [16, 16]
+                                            });
+                                            pickupMarker = L.marker([parseFloat(data.pickup.lat), parseFloat(data.pickup.lng)], { icon: pickupIcon }).addTo(trackMap);
+                                            pickupMarker.bindPopup('<strong>Pickup Location</strong><br>' + (data.pickup.address || ''));
+                                        }
+                                        
+                                        if (trackMarker) {
+                                            var group = L.featureGroup([trackMarker]);
+                                            if (pickupMarker) group.addLayer(pickupMarker);
+                                            try { trackMap.fitBounds(group.getBounds().pad(0.3), {maxZoom: 15}); } catch(e) {}
+                                        }
+                                        
+                                        statusEl.innerHTML = '<i class="fa-solid fa-check-circle" style="color:#059669;"></i> ' + (data.volunteer_name || 'Volunteer') + ' location updated';
+                                    } else {
+                                        statusEl.innerHTML = '<i class="fa-solid fa-circle"></i> ' + (data.message || 'Waiting for volunteer location...');
+                                        if (!trackMap && mapEl) {
+                                            // Show a placeholder map with pickup location if available
+                                            <?php if (!empty($pDon) && !empty($pDon['latitude']) && !empty($pDon['longitude'])): ?>
+                                            if (typeof L !== 'undefined') {
+                                                var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+                                                trackMap = L.map(mapEl, {
+                                                    center: [<?php echo $pDon['latitude']; ?>, <?php echo $pDon['longitude']; ?>],
+                                                    zoom: 14,
+                                                    zoomControl: false
+                                                });
+                                                L.tileLayer(isDark ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png' : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                                                    attribution: '&copy; OSM',
+                                                    maxZoom: 18
+                                                }).addTo(trackMap);
+                                                L.control.zoom({position:'topright'}).addTo(trackMap);
+                                                setTimeout(function() { trackMap.invalidateSize(); }, 200);
+                                            }
+                                            <?php endif; ?>
+                                        }
+                                    }
+                                })
+                                .catch(function() {
+                                    statusEl.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> Could not fetch location';
+                                });
+                        }
+                        
+                        loadConsumerTrackingMap();
+                        setInterval(fetchConsumerLocation, 10000);
+                    })();
+                    </script>
                 <?php elseif ($vd && $vd['status'] === 'delivered'): ?>
                     <div style="margin-top:12px;padding:12px 16px;background:#f0fdf4;border:1px solid #6ee7b7;border-radius:12px;">
                         <span style="color:#059669;font-weight:600;"><i class="fa-solid fa-check-circle"></i> Delivery completed by volunteer</span>

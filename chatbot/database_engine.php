@@ -81,6 +81,22 @@ class DatabaseEngine {
                 case 'pending_volunteers':
                     return $this->get_pending_volunteers($role);
 
+                // ── NEW: CERTIFICATE INFO ──
+                case 'certificate_info':
+                    return $this->get_certificate_info($user_id, $role);
+
+                // ── NEW: NOTIFICATIONS ──
+                case 'notifications':
+                    return $this->get_notifications($user_id, $role);
+
+                // ── NEW: TRACKING ──
+                case 'how_to_track':
+                    return $this->get_tracking_info($user_id, $role);
+
+                // ── NEW: PICKUP INFO ──
+                case 'pickup_process':
+                    return $this->get_pickup_info($user_id, $role);
+
                 case 'today_registrations':
                     return $this->get_today_registrations($role);
 
@@ -191,7 +207,7 @@ class DatabaseEngine {
             $message .= "💡 **Login or Register** to request food!<br>";
             $message .= "👉 <a href='login.php' style='color:#059669;font-weight:600;'>Login</a> | <a href='register.php' style='color:#059669;font-weight:600;'>Register</a>";
         } else {
-            $message .= "👉 <a href='donations.php' style='color:#059669;font-weight:600;'>View All Listings</a> | <a href='dashboard.php?page=request-donation' style='color:#059669;font-weight:600;'>Request Food</a>";
+            $message .= "👉 <a href='/frontend/donations.php' style='color:#059669;font-weight:600;'>View All Listings</a> | <a href='dashboard.php?page=request-donation' style='color:#059669;font-weight:600;'>Request Food</a>";
         }
 
         return [
@@ -496,7 +512,7 @@ class DatabaseEngine {
             return [
                 'success' => true,
                 'data'    => [],
-                'message' => 'Our team page is being updated. Visit <a href="team.php" style="color:#059669;font-weight:600;">Team Page</a> for the latest information.',
+                'message' => 'Our team page is being updated. Visit <a href="/frontend/team.php" style="color:#059669;font-weight:600;">Team Page</a> for the latest information.',
             ];
         }
 
@@ -539,7 +555,7 @@ class DatabaseEngine {
             . "📞 **Phone:** {$phone}<br>"
             . "📍 **Address:** {$address}<br><br>"
             . "💬 **WhatsApp:** <a href='{$whatsapp}' target='_blank' style='color:#059669;'>Chat with us</a><br>"
-            . "📝 <a href='contact.php' style='color:#059669;font-weight:600;'>Send us a message</a>";
+            . "📝 <a href='/frontend/contact.php' style='color:#059669;font-weight:600;'>Send us a message</a>";
 
         return [
             'success' => true,
@@ -649,6 +665,248 @@ class DatabaseEngine {
         return [
             'success' => true,
             'data'    => ['count' => $count],
+            'message' => $message,
+        ];
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // NEW QUERY METHODS
+    // ──────────────────────────────────────────────────────────────
+
+    /**
+     * Get certificate information for the current user.
+     */
+    private function get_certificate_info($user_id, $role) {
+        if ($user_id <= 0) {
+            return [
+                'success' => true,
+                'data'    => null,
+                'message' => '📜 Sayog awards **Certificates of Appreciation** to donors who complete food donations!<br><br>✅ Log in and complete a donation to earn your certificate.<br>👉 <a href="login.php" style="color:#059669;font-weight:600;">Login here</a>',
+            ];
+        }
+
+        $stmt = $this->pdo->prepare("SELECT COUNT(*) FROM donation_certificates WHERE user_id = ?");
+        $stmt->execute([$user_id]);
+        $count = (int)$stmt->fetchColumn();
+
+        $stmtCompleted = $this->pdo->prepare("SELECT COUNT(*) FROM donations WHERE donor_id = ? AND status = 'completed'");
+        $stmtCompleted->execute([$user_id]);
+        $completed = (int)$stmtCompleted->fetchColumn();
+
+        if ($count > 0) {
+            return [
+                'success' => true,
+                'data'    => ['certificate_count' => $count, 'completed_donations' => $completed],
+                'message' => "🎉 **You have {$count} certificate(s) of appreciation!**<br><br>"
+                    . "📜 View and download your certificates from your **Dashboard → Certificates** section.<br><br>"
+                    . "🌟 Share them on social media to inspire others to donate!<br><br>"
+                    . "👉 <a href='dashboard.php?page=certificates' style='color:#059669;font-weight:600;'>View My Certificates</a>",
+            ];
+        }
+
+        return [
+            'success' => true,
+            'data'    => ['certificate_count' => 0, 'completed_donations' => $completed],
+            'message' => "📜 You don't have any certificates yet.<br><br>"
+                . "✅ Complete a food donation to earn your **Certificate of Appreciation**!<br><br>"
+                . "👉 <a href='dashboard.php?page=create-donation' style='color:#059669;font-weight:600;'>Create a Donation</a>",
+        ];
+    }
+
+    /**
+     * Get recent notifications for the current user.
+     */
+    private function get_notifications($user_id, $role) {
+        if ($user_id <= 0) {
+            return [
+                'success' => true,
+                'data'    => [],
+                'message' => '🔔 You need to log in to see your notifications.<br><br>👉 <a href="login.php" style="color:#059669;font-weight:600;">Login here</a>',
+            ];
+        }
+
+        try {
+            $stmt = $this->pdo->prepare("
+                SELECT message, created_at, is_read, type 
+                FROM notifications 
+                WHERE user_id = ? 
+                ORDER BY created_at DESC 
+                LIMIT 5
+            ");
+            $stmt->execute([$user_id]);
+            $notifications = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (PDOException $e) {
+            $notifications = [];
+        }
+
+        if (empty($notifications)) {
+            return [
+                'success' => true,
+                'data'    => [],
+                'message' => '🔔 You have no recent notifications. You\'ll be notified when:<br><br>✅ Your donation is approved<br>✅ Someone requests your food<br>✅ A request is approved/rejected<br>✅ A donation is about to expire',
+            ];
+        }
+
+        $message = "🔔 **Your Recent Notifications:**<br><br>";
+        foreach ($notifications as $n) {
+            $icon = ($n['is_read'] ?? 0) ? '💬' : '🆕';
+            $time = date('d M H:i', strtotime($n['created_at']));
+            $message .= "{$icon} {$n['message']}<br><span style='font-size:11px;color:#94a3b8;'>{$time}</span><br><br>";
+        }
+        $message .= "👉 <a href='dashboard.php?page=notifications' style='color:#059669;font-weight:600;'>View All Notifications</a>";
+
+        return [
+            'success' => true,
+            'data'    => $notifications,
+            'message' => $message,
+        ];
+    }
+
+    /**
+     * Get tracking info for the current user's donations and requests.
+     */
+    private function get_tracking_info($user_id, $role) {
+        if ($user_id <= 0) {
+            return [
+                'success' => true,
+                'data'    => null,
+                'message' => '📊 You can track donations and requests once you log in.<br><br>👉 <a href="login.php" style="color:#059669;font-weight:600;">Login here</a>',
+            ];
+        }
+
+        // Get donation stats
+        $donation_counts = [];
+        try {
+            $stmt = $this->pdo->prepare("
+                SELECT 
+                    COUNT(*) as total,
+                    SUM(CASE WHEN verification_status = 'pending' THEN 1 ELSE 0 END) as pending_review,
+                    SUM(CASE WHEN status IN ('available', 'requested', 'accepted') THEN 1 ELSE 0 END) as active,
+                    SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed
+                FROM donations WHERE donor_id = ?
+            ");
+            $stmt->execute([$user_id]);
+            $donation_counts = $stmt->fetch(PDO::FETCH_ASSOC);
+        } catch (PDOException $e) {
+            $donation_counts = ['total' => 0, 'pending_review' => 0, 'active' => 0, 'completed' => 0];
+        }
+
+        // Get request stats
+        $request_counts = [];
+        try {
+            $stmt = $this->pdo->prepare("
+                SELECT 
+                    COUNT(*) as total,
+                    SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
+                    SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved,
+                    SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed
+                FROM requests WHERE consumer_id = ?
+            ");
+            $stmt->execute([$user_id]);
+            $request_counts = $stmt->fetch(PDO::FETCH_ASSOC);
+        } catch (PDOException $e) {
+            $request_counts = ['total' => 0, 'pending' => 0, 'approved' => 0, 'completed' => 0];
+        }
+
+        $don_total = (int)($donation_counts['total'] ?? 0);
+        $don_pending = (int)($donation_counts['pending_review'] ?? 0);
+        $don_active = (int)($donation_counts['active'] ?? 0);
+        $don_completed = (int)($donation_counts['completed'] ?? 0);
+
+        $req_total = (int)($request_counts['total'] ?? 0);
+        $req_pending = (int)($request_counts['pending'] ?? 0);
+        $req_approved = (int)($request_counts['approved'] ?? 0);
+        $req_completed = (int)($request_counts['completed'] ?? 0);
+
+        $message = "📊 **Your Tracking Overview**<br><br>"
+            . "**🍽️ Donations:**<br>"
+            . "📝 Total: {$don_total}<br>"
+            . "⏳ Pending Review: {$don_pending}<br>"
+            . "✅ Active: {$don_active}<br>"
+            . "🎉 Completed: {$don_completed}<br><br>"
+            . "**📋 Requests:**<br>"
+            . "📝 Total: {$req_total}<br>"
+            . "⏳ Pending: {$req_pending}<br>"
+            . "✅ Approved: {$req_approved}<br>"
+            . "🎉 Completed: {$req_completed}<br><br>"
+            . "👉 <a href='dashboard.php' style='color:#059669;font-weight:600;'>Go to Dashboard</a> | <a href='dashboard.php?page=my-donations' style='color:#059669;font-weight:600;'>My Donations</a>";
+
+        return [
+            'success' => true,
+            'data'    => ['donations' => $donation_counts, 'requests' => $request_counts],
+            'message' => $message,
+        ];
+    }
+
+    /**
+     * Get pickup coordination information.
+     */
+    private function get_pickup_info($user_id, $role) {
+        if ($user_id <= 0) {
+            return [
+                'success' => true,
+                'data'    => null,
+                'message' => '🚗 After your donation request is approved, coordinate pickup with the donor.<br><br>👉 <a href="login.php" style="color:#059669;font-weight:600;">Login to manage pickups</a>',
+            ];
+        }
+
+        // Get recent approved donations for the donor
+        $stmt = $this->pdo->prepare("
+            SELECT d.id, d.food_item, d.quantity, d.pickup_address, d.expiry_time,
+                   r.status AS request_status, u.name AS requester_name, u.phone AS requester_phone
+            FROM donations d
+            LEFT JOIN requests r ON d.id = r.donation_id AND r.status = 'approved'
+            LEFT JOIN users u ON r.consumer_id = u.id
+            WHERE d.donor_id = ? AND d.status IN ('available', 'accepted')
+            ORDER BY d.expiry_time ASC
+            LIMIT 5
+        ");
+        $stmt->execute([$user_id]);
+        $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        if (empty($items)) {
+            // Check for pending requests from consumer side
+            $stmt2 = $this->pdo->prepare("
+                SELECT d.food_item, d.pickup_address, r.status, u.name AS donor_name
+                FROM requests r
+                JOIN donations d ON r.donation_id = d.id
+                JOIN users u ON d.donor_id = u.id
+                WHERE r.consumer_id = ? AND r.status IN ('approved', 'pending')
+                LIMIT 5
+            ");
+            $stmt2->execute([$user_id]);
+            $consumer_items = $stmt2->fetchAll(PDO::FETCH_ASSOC);
+
+            if (!empty($consumer_items)) {
+                $message = "🚗 **Your Active Pickups:**<br><br>";
+                foreach ($consumer_items as $item) {
+                    $status = ucfirst($item['status']);
+                    $message .= "🍽️ **{$item['food_item']}** from {$item['donor_name']}<br>";
+                    $message .= "📍 {$item['pickup_address']}<br>";
+                    $message .= "Status: **{$status}**<br><br>";
+                }
+                $message .= "👉 <a href='dashboard.php?page=my-requests' style='color:#059669;font-weight:600;'>View Requests</a>";
+            } else {
+                $message = "🚗 You have no active pickups right now.<br><br>"
+                    . "When your donation is requested or your request is approved, pickup details will appear here!<br><br>"
+                    . "👉 <a href='dashboard.php?page=create-donation' style='color:#059669;font-weight:600;'>Create a Donation</a>";
+            }
+        } else {
+            $message = "🚗 **Pending Pickups:**<br><br>";
+            foreach ($items as $item) {
+                $message .= "🍽️ **{$item['food_item']}** — {$item['quantity']}<br>";
+                $message .= "📍 {$item['pickup_address']}<br>";
+                if (!empty($item['requester_name'])) {
+                    $message .= "👤 Requested by: {$item['requester_name']} ({$item['requester_phone']})<br>";
+                }
+                $message .= "⏰ Expires: " . date('d M H:i', strtotime($item['expiry_time'])) . "<br><br>";
+            }
+            $message .= "👉 <a href='dashboard.php?page=my-donations' style='color:#059669;font-weight:600;'>Manage Donations</a>";
+        }
+
+        return [
+            'success' => true,
+            'data'    => $items ?? [],
             'message' => $message,
         ];
     }

@@ -22,7 +22,7 @@
     // CONFIGURATION
     // ============================================================
     var CONFIG = {
-        apiUrl: 'chatbot/api.php',
+        apiUrl: '/chatbot/api.php',
         botName: 'Sayog Assistant',
         botAvatar: null, // Will use emoji if null
         userAvatar: null, // Will use initials if null
@@ -36,6 +36,10 @@
             'Available food',
             'Platform Statistics',
             'Become a Volunteer',
+            'How to register',
+            'Food Safety Tips',
+            'How volunteer delivery works',
+            'Get Certificate',
             'Contact Info'
         ]
     };
@@ -381,15 +385,19 @@
 
     function addWelcomeMessage() {
         addMessage('bot', 
-            '👋 Hello! I\'m <strong>Sayog Assistant</strong>, your AI-powered guide.<br><br>' +
+            '👋 <strong>Namaste!</strong> I\'m <strong>Sayog Assistant</strong>, your AI-powered guide for all things food donation! 🌟<br><br>' +
             'I can help you with:<br>' +
-            '🔹 Learning about Sayog<br>' +
-            '🔹 Donating food<br>' +
-            '🔹 Requesting food<br>' +
-            '🔹 Registration & Login<br>' +
-            '🔹 Platform Statistics<br>' +
-            '🔹 Becoming a Volunteer<br><br>' +
-            'What would you like to know? 😊'
+            '🔹 <strong>About Sayog</strong> — What we do & how it works<br>' +
+            '🔹 <strong>Donating Food</strong> — How to donate & guidelines<br>' +
+            '🔹 <strong>Requesting Food</strong> — How to find & request food<br>' +
+            '🔹 <strong>Registration & Login</strong> — Create account, OTP, passwords<br>' +
+            '🔹 <strong>Volunteering</strong> — Become a volunteer & deliveries<br>' +
+            '🔹 <strong>Tracking</strong> — Monitor donations & requests<br>' +
+            '🔹 <strong>Certificates</strong> — Earn appreciation awards<br>' +
+            '🔹 <strong>Food Safety</strong> — Tips for safe food handling<br>' +
+            '🔹 <strong>Ratings</strong> — Rate your experience<br>' +
+            '🔹 <strong>Privacy & Security</strong> — Your data is safe<br><br>' +
+            'Ask me anything about Sayog! 😊'
         );
         
         addSuggestions(CONFIG.suggestions);

@@ -8,11 +8,12 @@ if (!isset($active_page)) $active_page = 'home';
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><?php echo htmlspecialchars($page_title); ?></title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="/style.css">
+    <link rel="stylesheet" href="/premium.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <script src="js/app.js"></script>
-    <link rel="stylesheet" href="chatbot/chatbot.css">
-    <script src="chatbot/chatbot.js"></script>
+    <script src="/js/app.js"></script>
+    <link rel="stylesheet" href="/chatbot/chatbot.css">
+    <script src="/chatbot/chatbot.js"></script>
     <style>
       /* ===== MOBILE NAVIGATION — Hamburger Menu ===== */
       .mobile-nav-toggle {
@@ -126,15 +127,15 @@ if (!isset($active_page)) $active_page = 'home';
             <i class="fa-solid fa-bars"></i>
         </button>
         <div class="site-branding">
-            <a href="index.php" class="site-logo"><i class="fa-solid fa-hand-holding-heart"></i> Sayog</a>
+            <a href="/frontend/index.php" class="site-logo"><i class="fa-solid fa-hand-holding-heart"></i> Sayog</a>
         </div>
         <nav class="site-nav" id="mobileNav">
-            <a href="index.php"<?php echo $active_page === 'home' ? ' class="active" style="color: #059669;"' : ''; ?> data-i18n="nav.home">Home</a>
-            <a href="donations.php"<?php echo $active_page === 'donations' ? ' class="active" style="color: #059669;"' : ''; ?> data-i18n="nav.food_listings">Food Listings</a>
-            <a href="volunteers.php"<?php echo $active_page === 'volunteers' ? ' class="active" style="color: #059669;"' : ''; ?> data-i18n="nav.volunteers">Volunteers</a>
-            <a href="team.php"<?php echo $active_page === 'team' ? ' class="active" style="color: #059669;"' : ''; ?> data-i18n="nav.our_team">Our Team</a>
-            <a href="about.php"<?php echo $active_page === 'about' ? ' class="active" style="color: #059669;"' : ''; ?> data-i18n="nav.about">About</a>
-            <a href="contact.php"<?php echo $active_page === 'contact' ? ' class="active" style="color: #059669;"' : ''; ?> data-i18n="nav.contact">Contact</a>
+            <a href="/frontend/index.php"<?php echo $active_page === 'home' ? ' class="active" style="color: #059669;"' : ''; ?> data-i18n="nav.home">Home</a>
+            <a href="/frontend/donations.php"<?php echo $active_page === 'donations' ? ' class="active" style="color: #059669;"' : ''; ?> data-i18n="nav.food_listings">Food Listings</a>
+            <a href="/frontend/volunteers.php"<?php echo $active_page === 'volunteers' ? ' class="active" style="color: #059669;"' : ''; ?> data-i18n="nav.volunteers">Volunteers</a>
+            <a href="/frontend/team.php"<?php echo $active_page === 'team' ? ' class="active" style="color: #059669;"' : ''; ?> data-i18n="nav.our_team">Our Team</a>
+            <a href="/frontend/about.php"<?php echo $active_page === 'about' ? ' class="active" style="color: #059669;"' : ''; ?> data-i18n="nav.about">About</a>
+            <a href="/frontend/contact.php"<?php echo $active_page === 'contact' ? ' class="active" style="color: #059669;"' : ''; ?> data-i18n="nav.contact">Contact</a>
             <a href="login.php" data-i18n="nav.login">Login</a>
             <a href="register.php" style="background: #059669; color:#fff" data-i18n="nav.get_started">Get Started</a>
             <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme" style="margin-left:4px;">

@@ -61,15 +61,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Log In | Sayog - Food Donation System</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="/style.css">
+    <link rel="stylesheet" href="/premium.css">
     <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <script src="js/app.js"></script>
+    <script src="/js/app.js"></script>
 </head>
 <body class="auth-wrapper">
     <div class="auth-card animate-fade-in">
         <div class="auth-header">
-            <a href="#" class="auth-logo">
+            <a href="/frontend/index.php" class="auth-logo">
                 <div class="auth-logo-icon">
                     <i class="fa-solid fa-hand-holding-heart"></i>
                 </div>
@@ -141,13 +142,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </a> -->
 
         <div class="auth-footer">
-            Don't have an account? <a href="register.php">Sign Up</a>
+            Don't have an account? <a href="/register.php">Sign Up</a>
         </div>
         <div class="auth-footer" style="margin-top: 12px; font-size: 13px; color: var(--text-secondary);">
-            <a href="index.php"><i class="fa-solid fa-arrow-left"></i> Back to Website</a>
+            <a href="/frontend/index.php"><i class="fa-solid fa-arrow-left"></i> Back to Website</a>
         </div>
         <div class="auth-footer" style="margin-top: 12px; font-size: 13px; color: var(--text-secondary);">
-            Are you an administrator? <a href="admin/admin-login.php">Sign in to Admin Panel</a>
+            Are you an administrator? <a href="/admin/admin-login.php">Sign in to Admin Panel</a>
         </div>
     </div>
 </body>

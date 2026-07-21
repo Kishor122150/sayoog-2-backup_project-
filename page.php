@@ -26,13 +26,13 @@ if (!$page) {
 <body>
     <header class="site-header">
         <div class="site-branding">
-            <a href="index.php" class="site-logo"><i class="fa-solid fa-hand-holding-heart"></i> Sayog</a>
+            <a href="/frontend/index.php" class="site-logo"><i class="fa-solid fa-hand-holding-heart"></i> Sayog</a>
         </div>
         <nav class="site-nav">
-            <a href="index.php">Home</a>
-            <a href="donations.php">Food Listings</a>
-            <a href="about.php">About</a>
-            <a href="contact.php">Contact</a>
+            <a href="/frontend/index.php">Home</a>
+            <a href="/frontend/donations.php">Food Listings</a>
+            <a href="/frontend/about.php">About</a>
+            <a href="/frontend/contact.php">Contact</a>
             <a href="login.php">Login</a>
         </nav>
     </header>
@@ -44,7 +44,7 @@ if (!$page) {
                     <i class="fa-solid fa-triangle-exclamation"></i>
                     <h3>Page not found</h3>
                     <p>We could not locate the page you requested.</p>
-                    <a href="index.php" class="btn btn-primary">Back to Home</a>
+                    <a href="/frontend/index.php" class="btn btn-primary">Back to Home</a>
                 </div>
             </section>
         <?php else: ?>
