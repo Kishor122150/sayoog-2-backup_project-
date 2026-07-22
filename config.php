@@ -7,6 +7,12 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
+// Bootstrap the new service layer (safe — no-op if app/ not present)
+$appBootstrap = __DIR__ . '/app/bootstrap.php';
+if (file_exists($appBootstrap)) {
+    require_once $appBootstrap;
+}
+
 // Upload storage path
 define('UPLOADS_DIR', __DIR__ . '/uploads');
 if (!is_dir(UPLOADS_DIR)) {
@@ -547,6 +553,18 @@ try {
     }
 
     // ─── VOLUNTEER DELIVERIES TABLE ───
+
+    // Safe migration: add assignment_method column if not exists
+    $colCheckVd = $pdo->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'volunteer_deliveries' AND COLUMN_NAME = ?");
+    $colCheckVd->execute(['assignment_method']);
+    if (!$colCheckVd->fetchColumn()) {
+        try {
+            $pdo->exec("ALTER TABLE volunteer_deliveries ADD COLUMN assignment_method ENUM('auto','manual_accept','admin_assign','reassigned') DEFAULT NULL AFTER status");
+        } catch (PDOException $e) {
+            // Column may already exist on some MySQL versions — ignore
+        }
+    }
+
     // Add delivery_method column to donations (after donor approves)
     $colCheckDon = $pdo->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'donations' AND COLUMN_NAME = ?");
     $colCheckDon->execute(['delivery_method']);
@@ -625,6 +643,92 @@ try {
     if (!$colCheckAssign->fetchColumn()) {
         $pdo->exec("ALTER TABLE volunteer_deliveries ADD COLUMN assignment_method ENUM('auto','manual_accept','admin_assign','reassigned') DEFAULT NULL AFTER status");
     }
+
+    // ─── DELIVERY EVENTS TABLE (Event Sourcing / Audit Trail) ───
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `delivery_events` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `delivery_id` INT NOT NULL,
+            `from_status` VARCHAR(30) DEFAULT NULL,
+            `to_status` VARCHAR(30) NOT NULL,
+            `actor_type` ENUM('volunteer','donor','consumer','admin','system') NOT NULL DEFAULT 'system',
+            `actor_id` INT DEFAULT NULL,
+            `latitude` DECIMAL(10,7) DEFAULT NULL,
+            `longitude` DECIMAL(10,7) DEFAULT NULL,
+            `notes` TEXT DEFAULT NULL,
+            `metadata` JSON DEFAULT NULL,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (`delivery_id`) REFERENCES `volunteer_deliveries`(`id`) ON DELETE CASCADE,
+            INDEX `idx_event_delivery` (`delivery_id`),
+            INDEX `idx_event_actor` (`actor_type`, `actor_id`),
+            INDEX `idx_event_time` (`created_at`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    ");
+
+    // Add delivery_events_count to volunteer_deliveries for fast counts
+    $colCheckEv = $pdo->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'volunteer_deliveries' AND COLUMN_NAME = ?");
+    $colCheckEv->execute(['event_count']);
+    if (!$colCheckEv->fetchColumn()) {
+        $pdo->exec("ALTER TABLE volunteer_deliveries ADD COLUMN event_count INT NOT NULL DEFAULT 0 AFTER delivery_notes");
+    }
+
+    // ─── NOTIFICATION QUEUE TABLE ───
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `notification_queue` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `user_id` INT NOT NULL,
+            `channel` ENUM('in_app','email','sms','whatsapp','push') NOT NULL DEFAULT 'in_app',
+            `type` VARCHAR(50) NOT NULL,
+            `subject` VARCHAR(200) DEFAULT NULL,
+            `body` TEXT NOT NULL,
+            `link` VARCHAR(255) DEFAULT NULL,
+            `priority` TINYINT(1) NOT NULL DEFAULT 0,
+            `status` ENUM('pending','sent','failed','cancelled') NOT NULL DEFAULT 'pending',
+            `retry_count` TINYINT NOT NULL DEFAULT 0,
+            `max_retries` TINYINT NOT NULL DEFAULT 3,
+            `last_error` TEXT DEFAULT NULL,
+            `scheduled_at` DATETIME DEFAULT NULL,
+            `sent_at` DATETIME DEFAULT NULL,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
+            INDEX `idx_queue_status` (`status`, `priority`),
+            INDEX `idx_queue_user` (`user_id`, `status`),
+            INDEX `idx_queue_scheduled` (`scheduled_at`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    ");
+
+    // ─── ANALYTICS CACHE TABLE ───
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `analytics_cache` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `cache_key` VARCHAR(100) NOT NULL UNIQUE,
+            `cache_value` JSON NOT NULL,
+            `period_start` DATE DEFAULT NULL,
+            `period_end` DATE DEFAULT NULL,
+            `generated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX `idx_cache_key` (`cache_key`),
+            INDEX `idx_cache_generated` (`generated_at`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    ");
+
+    // ─── GEOFENCE LOG TABLE ───
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `geofence_log` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `delivery_id` INT NOT NULL,
+            `volunteer_user_id` INT NOT NULL,
+            `fence_type` ENUM('pickup','dropoff','waypoint') NOT NULL,
+            `triggered_at` DATETIME NOT NULL,
+            `latitude` DECIMAL(10,7) NOT NULL,
+            `longitude` DECIMAL(10,7) NOT NULL,
+            `distance_meters` DECIMAL(10,2) DEFAULT NULL,
+            `action_taken` VARCHAR(100) DEFAULT NULL,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (`delivery_id`) REFERENCES `volunteer_deliveries`(`id`) ON DELETE CASCADE,
+            INDEX `idx_fence_delivery` (`delivery_id`),
+            INDEX `idx_fence_time` (`triggered_at`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    ");
 
     // ─── MESSAGING TABLE ───
     $pdo->exec("
@@ -726,6 +830,76 @@ try {
         $pdo->exec("ALTER TABLE users ADD COLUMN impact_points INT NOT NULL DEFAULT 0 AFTER referral_code");
     }
 
+    // ─── USER BADGES TABLE (trust badges for all users: NGO verified, top donor, trusted, etc.) ───
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `user_badges` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `user_id` INT NOT NULL,
+            `badge_type` ENUM('ngo_verified','ngo_registered','trusted_donor','top_volunteer','community_champion','early_adopter') NOT NULL,
+            `badge_label` VARCHAR(100) NOT NULL,
+            `badge_icon` VARCHAR(100) DEFAULT NULL,
+            `badge_color` VARCHAR(7) DEFAULT '#059669',
+            `awarded_by` INT DEFAULT NULL,
+            `awarded_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            `expires_at` DATETIME DEFAULT NULL,
+            FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
+            UNIQUE KEY `unique_user_badge` (`user_id`, `badge_type`),
+            INDEX `idx_badge_user` (`user_id`),
+            INDEX `idx_badge_type` (`badge_type`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    ");
+
+    // Add account_type + organization columns to users table
+    $colCheck = $pdo->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = ?");
+    $colCheck->execute(['account_type']);
+    if (!$colCheck->fetchColumn()) {
+        $pdo->exec("ALTER TABLE users ADD COLUMN account_type ENUM('personal','ngo','other') NOT NULL DEFAULT 'personal' AFTER role");
+    }
+    $colCheck->execute(['org_name']);
+    if (!$colCheck->fetchColumn()) {
+        $pdo->exec("ALTER TABLE users ADD COLUMN org_name VARCHAR(200) DEFAULT NULL AFTER account_type");
+    }
+    $colCheck->execute(['org_registration']);
+    if (!$colCheck->fetchColumn()) {
+        $pdo->exec("ALTER TABLE users ADD COLUMN org_registration VARCHAR(100) DEFAULT NULL AFTER org_name");
+    }
+    $colCheck->execute(['org_certificate']);
+    if (!$colCheck->fetchColumn()) {
+        $pdo->exec("ALTER TABLE users ADD COLUMN org_certificate VARCHAR(255) DEFAULT NULL AFTER org_registration");
+    }
+    $colCheck->execute(['org_type']);
+    if (!$colCheck->fetchColumn()) {
+        $pdo->exec("ALTER TABLE users ADD COLUMN org_type VARCHAR(50) DEFAULT NULL AFTER org_certificate");
+    }
+    $colCheck->execute(['org_district']);
+    if (!$colCheck->fetchColumn()) {
+        $pdo->exec("ALTER TABLE users ADD COLUMN org_district VARCHAR(100) DEFAULT NULL AFTER org_type");
+    }
+    $colCheck->execute(['org_ward']);
+    if (!$colCheck->fetchColumn()) {
+        $pdo->exec("ALTER TABLE users ADD COLUMN org_ward VARCHAR(100) DEFAULT NULL AFTER org_district");
+    }
+    $colCheck->execute(['org_verified']);
+    if (!$colCheck->fetchColumn()) {
+        $pdo->exec("ALTER TABLE users ADD COLUMN org_verified TINYINT(1) NOT NULL DEFAULT 0 AFTER org_ward");
+        $pdo->exec("ALTER TABLE users ADD COLUMN org_verified_at DATETIME DEFAULT NULL AFTER org_verified");
+        $pdo->exec("ALTER TABLE users ADD COLUMN org_verified_by INT DEFAULT NULL AFTER org_verified_at");
+    }
+    // Add display_as_org toggle
+    $colCheck->execute(['display_as_org']);
+    if (!$colCheck->fetchColumn()) {
+        $pdo->exec("ALTER TABLE users ADD COLUMN display_as_org TINYINT(1) NOT NULL DEFAULT 0 AFTER org_verified_by");
+    }
+    
+    // Add index on notifications.created_at for better performance
+    $idxCheck = $pdo->prepare("SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'notifications' AND INDEX_NAME = ?");
+    $idxCheck->execute(['idx_created_at']);
+    if (!$idxCheck->fetchColumn()) {
+        try {
+            $pdo->exec("ALTER TABLE notifications ADD INDEX idx_created_at (created_at)");
+        } catch (PDOException $e) {}
+    }
+    
     // ─── CHATBOT TABLES ───
     $pdo->exec("
         CREATE TABLE IF NOT EXISTS `chatbot_knowledge` (
@@ -942,6 +1116,20 @@ function create_notification($pdo, $user_id, $type, $message, $link = null, $sen
     } catch (PDOException $e) {
         // ignore notification failure to avoid breaking user flow
     }
+}
+
+/**
+ * Format a timestamp as a human-readable "time ago" string.
+ */
+function time_ago($datetime) {
+    $timestamp = strtotime($datetime);
+    $diff = time() - $timestamp;
+    
+    if ($diff < 60) return 'Just now';
+    if ($diff < 3600) return floor($diff / 60) . 'm ago';
+    if ($diff < 86400) return floor($diff / 3600) . 'h ago';
+    if ($diff < 604800) return floor($diff / 86400) . 'd ago';
+    return date('d M Y', $timestamp);
 }
 
 function get_unread_notifications_count($pdo, $user_id) {
@@ -1275,6 +1463,112 @@ function render_stars($rating, $size = 14) {
 /**
  * Render rating badge HTML for a user card.
  */
+/**
+ * Get all badges for a user.
+ */
+function get_user_badges($pdo, $user_id) {
+    $stmt = $pdo->prepare("SELECT * FROM user_badges WHERE user_id = ? ORDER BY awarded_at DESC");
+    $stmt->execute([$user_id]);
+    return $stmt->fetchAll();
+}
+
+/**
+ * Get the primary display badge for a user (NGO verified takes priority, then trust badges).
+ */
+function get_primary_badge($pdo, $user_id) {
+    // Check for NGO verified badge first
+    $stmt = $pdo->prepare("SELECT org_name, org_verified, account_type, org_type, display_as_org FROM users WHERE id = ?");
+    $stmt->execute([$user_id]);
+    $user = $stmt->fetch();
+    
+    if ($user && $user['account_type'] === 'ngo' && $user['org_verified'] && $user['display_as_org']) {
+        return [
+            'badge_type' => 'ngo_verified',
+            'badge_label' => $user['org_name'],
+            'badge_icon' => 'fa-building-columns',
+            'badge_color' => '#059669',
+        ];
+    }
+    
+    // Check for auto-awarded trust badges
+    $stmt = $pdo->prepare("SELECT * FROM user_badges WHERE user_id = ? AND badge_type IN ('trusted_donor','top_volunteer','community_champion') ORDER BY awarded_at DESC LIMIT 1");
+    $stmt->execute([$user_id]);
+    $badge = $stmt->fetch();
+    
+    return $badge ?: null;
+}
+
+/**
+ * Render a user's display name with badge HTML.
+ * Shows org name if NGO + verified + display_as_org, otherwise personal name + trust badges.
+ */
+function render_user_with_badge($pdo, $user_id, $show_link = true) {
+    $stmt = $pdo->prepare("SELECT id, name, account_type, org_name, org_verified, display_as_org FROM users WHERE id = ?");
+    $stmt->execute([$user_id]);
+    $user = $stmt->fetch();
+    if (!$user) return 'Unknown User';
+    
+    $displayName = htmlspecialchars($user['name']);
+    $badgeHtml = '';
+    
+    // NGO verified badge
+    if ($user['account_type'] === 'ngo' && $user['org_verified'] && $user['display_as_org']) {
+        $displayName = htmlspecialchars($user['org_name']);
+        $badgeHtml = ' <span style="display:inline-flex;align-items:center;gap:3px;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:600;background:rgba(5,150,105,0.1);color:#059669;" title="Verified NGO"><i class="fa-solid fa-circle-check"></i> NGO</span>';
+    } else {
+        // Check for other badges
+        $bStmt = $pdo->prepare("SELECT badge_type, badge_label, badge_color FROM user_badges WHERE user_id = ? AND badge_type IN ('trusted_donor','top_volunteer','community_champion','early_adopter') ORDER BY awarded_at DESC LIMIT 2");
+        $bStmt->execute([$user_id]);
+        $badges = $bStmt->fetchAll();
+        foreach ($badges as $b) {
+            $color = htmlspecialchars($b['badge_color']);
+            $label = htmlspecialchars($b['badge_label']);
+            $badgeHtml .= ' <span style="display:inline-flex;align-items:center;gap:3px;padding:1px 8px;border-radius:999px;font-size:10px;font-weight:600;background:' . $color . '15;color:' . $color . ';">' . $label . '</span>';
+        }
+    }
+    
+    if ($show_link) {
+        return '<a href="dashboard.php?page=profile&user=' . $user_id . '" style="text-decoration:none;color:inherit;">' . $displayName . '</a>' . $badgeHtml;
+    }
+    return $displayName . $badgeHtml;
+}
+
+/**
+ * Get NGO org details for display (only if viewer is admin or the donor).
+ */
+function get_ngo_details_for_viewer($pdo, $org_user_id, $viewer_id) {
+    $stmt = $pdo->prepare("SELECT account_type, org_name, org_registration, org_certificate, org_type, org_district, org_ward, org_verified FROM users WHERE id = ? AND account_type = 'ngo'");
+    $stmt->execute([$org_user_id]);
+    $org = $stmt->fetch();
+    if (!$org) return null;
+    
+    // Only show full details to admin, the org user, or the specific donor viewing
+    $isAdmin = ($_SESSION['role'] ?? '') === 'admin';
+    $isOwner = ($viewer_id === $org_user_id);
+    
+    if ($isAdmin || $isOwner) {
+        return $org; // Full details
+    }
+    
+    // Check if viewer is a donor who has interacted with this NGO
+    $stmt = $pdo->prepare("SELECT id FROM donations WHERE donor_id = ? AND EXISTS (SELECT 1 FROM requests r JOIN users u ON r.consumer_id = u.id WHERE r.donation_id = donations.id AND u.id = ?)");
+    $stmt->execute([$viewer_id, $org_user_id]);
+    if ($stmt->fetch()) {
+        return $org; // Donor who gave to this NGO can see details
+    }
+    
+    // Other users see only public info
+    return [
+        'org_name' => $org['org_name'],
+        'org_type' => $org['org_type'],
+        'org_district' => $org['org_district'],
+        'org_verified' => $org['org_verified'],
+        'org_registration' => null, // hidden
+        'org_certificate' => null, // hidden
+        'org_ward' => null, // hidden
+    ];
+}
+
 function render_rating_badge($pdo, $user_id) {
     $r = get_user_rating($pdo, $user_id);
     if ($r['total_ratings'] === 0) {
@@ -1283,6 +1577,121 @@ function render_rating_badge($pdo, $user_id) {
     return '<span class="rating-badge">' . render_stars($r['average'], 12)
         . ' <span class="rating-number">' . number_format($r['average'], 1) . '</span>'
         . ' <span class="rating-count">(' . $r['total_ratings'] . ')</span></span>';
+}
+
+// ============================================================
+// BADGE AUTO-AWARD SYSTEM
+// ============================================================
+
+/**
+ * Award a trust badge to a user. Uses INSERT IGNORE so duplicate awards are safe.
+ *
+ * @param PDO    $pdo
+ * @param int    $user_id
+ * @param string $badge_type   One of: 'trusted_donor','top_volunteer','community_champion','early_adopter'
+ * @param string $label        Human-readable label (e.g. 'Trusted Donor', 'Top Volunteer')
+ * @param string $icon         FontAwesome icon class (e.g. 'fa-heart', 'fa-truck-fast')
+ * @param string $color        Hex badge color
+ * @param int|null $awarded_by Admin user ID who awarded it (null = system)
+ * @return bool True if badge was newly awarded, false if already exists
+ */
+function award_trust_badge($pdo, $user_id, $badge_type, $label, $icon = null, $color = '#059669', $awarded_by = null) {
+    try {
+        $stmt = $pdo->prepare("
+            INSERT IGNORE INTO user_badges (user_id, badge_type, badge_label, badge_icon, badge_color, awarded_by)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ");
+        $stmt->execute([$user_id, $badge_type, $label, $icon, $color, $awarded_by]);
+        
+        if ($stmt->rowCount() > 0) {
+            // New badge awarded — notify the user
+            $badge_emojis = [
+                'trusted_donor' => '🏅',
+                'top_volunteer' => '🎖️',
+                'community_champion' => '🌟',
+                'early_adopter' => '🚀',
+            ];
+            $emoji = $badge_emojis[$badge_type] ?? '🎉';
+            create_notification(
+                $pdo,
+                $user_id,
+                'badge_awarded',
+                "{$emoji} Congratulations! You earned the **{$label}** badge! View it on your profile.",
+                'dashboard.php?page=profile',
+                false
+            );
+            return true;
+        }
+    } catch (PDOException $e) {
+        // Silently ignore badge failures — non-critical
+    }
+    return false;
+}
+
+/**
+ * Auto-check and award trust badges for a user based on their activity.
+ * Call this after a donation completes or a volunteer delivery finishes.
+ *
+ * Award criteria:
+ * - 'trusted_donor':     5+ completed donations as donor
+ * - 'top_volunteer':      10+ completed volunteer deliveries
+ * - 'community_champion': 5 completed donations AND 5 volunteer deliveries (or 20 impact_points)
+ * - 'early_adopter':      Registered within first 30 days of platform (awarded manually via admin)
+ *
+ * @param PDO $pdo
+ * @param int $user_id
+ */
+function auto_award_trust_badges($pdo, $user_id) {
+    // ── 1. Count completed donations as donor ──
+    $donStmt = $pdo->prepare("SELECT COUNT(*) FROM donations WHERE donor_id = ? AND status = 'completed'");
+    $donStmt->execute([$user_id]);
+    $completedDonations = (int)$donStmt->fetchColumn();
+
+    // ── 2. Count completed volunteer deliveries ──
+    $delStmt = $pdo->prepare("SELECT COUNT(*) FROM volunteer_deliveries WHERE volunteer_user_id = ? AND status = 'delivered'");
+    $delStmt->execute([$user_id]);
+    $completedDeliveries = (int)$delStmt->fetchColumn();
+
+    // ── 3. Get impact_points from users table ──
+    $impStmt = $pdo->prepare("SELECT impact_points FROM users WHERE id = ?");
+    $impStmt->execute([$user_id]);
+    $impactPoints = (int)$impStmt->fetchColumn();
+
+    // ── 4. Award 'trusted_donor' badge (5+ completed donations) ──
+    if ($completedDonations >= 5) {
+        award_trust_badge(
+            $pdo, $user_id,
+            'trusted_donor',
+            'Trusted Donor',
+            'fa-heart',
+            '#e11d48' // rose-red
+        );
+    }
+
+    // ── 5. Award 'top_volunteer' badge (10+ completed deliveries) ──
+    if ($completedDeliveries >= 10) {
+        award_trust_badge(
+            $pdo, $user_id,
+            'top_volunteer',
+            'Top Volunteer',
+            'fa-truck-fast',
+            '#2563eb' // blue
+        );
+    }
+
+    // ── 6. Award 'community_champion' badge (5 donations AND 5 deliveries, OR 20+ impact points) ──
+    $championCriteria = ($completedDonations >= 5 && $completedDeliveries >= 5) || $impactPoints >= 20;
+    if ($championCriteria) {
+        award_trust_badge(
+            $pdo, $user_id,
+            'community_champion',
+            'Community Champion',
+            'fa-crown',
+            '#f59e0b' // amber
+        );
+    }
+
+    // ── 7. Award 'early_adopter' badge is always manually awarded by admin (not auto) ──
 }
 
 /**
@@ -2816,6 +3225,208 @@ function cleanup_expired_otps($pdo) {
     $stmt->execute();
 }
 
+
+// ============================================================
+// PAGINATION SYSTEM — Reusable pagination helpers
+// ============================================================
+
+/**
+ * Get paginated data with total count.
+ *
+ * @param PDO    $pdo       PDO database connection
+ * @param string $baseQuery  SELECT query WITHOUT LIMIT/OFFSET (e.g. "SELECT * FROM users WHERE role != 'admin'")
+ * @param string $countQuery COUNT query (e.g. "SELECT COUNT(*) FROM users WHERE role != 'admin'")
+ * @param array  $params    Bound parameters for both queries
+ * @param int    $page      Current page number (1-based)
+ * @param int    $perPage   Rows per page (default 20)
+ * @param string $orderBy   Optional ORDER BY clause (e.g. "created_at DESC")
+ * @return array ['data' => [...], 'total' => int, 'page' => int, 'perPage' => int, 'lastPage' => int, 'from' => int, 'to' => int]
+ */
+function paginate($pdo, $baseQuery, $countQuery, $params = [], $page = 1, $perPage = 20, $orderBy = '') {
+    // Validate and sanitize inputs
+    $page = max(1, intval($page));
+    $perPage = intval($perPage);
+    // Restrict perPage to valid options
+    $validPerPage = [10, 20, 50, 100];
+    if (!in_array($perPage, $validPerPage)) {
+        $perPage = 20;
+    }
+    
+    // Get total count
+    $countStmt = $pdo->prepare($countQuery);
+    $countStmt->execute($params);
+    $total = (int) $countStmt->fetchColumn();
+    
+    // Calculate pagination values
+    $lastPage = max(1, (int) ceil($total / $perPage));
+    $page = min($page, $lastPage);
+    $offset = ($page - 1) * $perPage;
+    $from = $total > 0 ? $offset + 1 : 0;
+    $to = min($offset + $perPage, $total);
+    
+    // Build final query with LIMIT and OFFSET
+    $query = $baseQuery;
+    if (!empty($orderBy)) {
+        // Sanitize: only allow alphanumeric, underscore, space, comma, dot, and parens (safe)
+        $orderBy = preg_replace('/[^a-zA-Z0-9_\s,\.\(\)]/', '', $orderBy);
+        $query .= ' ORDER BY ' . $orderBy;
+    }
+    $query .= ' LIMIT ' . intval($perPage) . ' OFFSET ' . intval($offset);
+    
+    $stmt = $pdo->prepare($query);
+    $stmt->execute($params);
+    $data = $stmt->fetchAll();
+    
+    return [
+        'data'     => $data,
+        'total'    => $total,
+        'page'     => $page,
+        'perPage'  => $perPage,
+        'lastPage' => $lastPage,
+        'from'     => $from,
+        'to'       => $to,
+    ];
+}
+
+/**
+ * Generate pagination meta array for API responses.
+ */
+function pagination_meta($result) {
+    return [
+        'current_page' => $result['page'],
+        'per_page'     => $result['perPage'],
+        'total'        => $result['total'],
+        'last_page'    => $result['lastPage'],
+        'from'         => $result['from'],
+        'to'           => $result['to'],
+    ];
+}
+
+/**
+ * Get current page from GET/request, with validation.
+ */
+function get_current_page($key = 'page') {
+    $page = isset($_GET[$key]) ? intval($_GET[$key]) : 1;
+    return max(1, $page);
+}
+
+/**
+ * Get rows per page from GET/request, with validation.
+ */
+function get_per_page($key = 'per_page') {
+    $perPage = isset($_GET[$key]) ? intval($_GET[$key]) : 20;
+    $valid = [10, 20, 50, 100];
+    return in_array($perPage, $valid) ? $perPage : 20;
+}
+
+/**
+ * Render a complete pagination UI (HTML).
+ * Uses existing admin CSS classes for styling.
+ *
+ * @param array $result  Result from paginate()
+ * @param string $url    Base URL with query params (page will be appended)
+ * @param string $pageKey  The query param name for page number
+ * @return string  HTML for pagination controls
+ */
+function render_pagination($result, $url = '', $pageKey = 'page') {
+    if ($result['lastPage'] <= 1) {
+        return '';
+    }
+    
+    $html = '<div class="pagination-wrapper">';
+    
+    // "Showing X to Y of Z" text
+    $html .= '<div class="pagination-info">';
+    $html .= 'Showing <strong>' . $result['from'] . '&ndash;' . $result['to'] . '</strong> of <strong>' . $result['total'] . '</strong> records';
+    $html .= '</div>';
+    
+    // Build URL preserving existing parameters
+    $fullUrl = $url;
+    if (empty($fullUrl)) {
+        $fullUrl = $_SERVER['REQUEST_URI'];
+        // Remove existing page parameter to avoid duplication
+        $fullUrl = preg_replace('/[?&]' . preg_quote($pageKey, '/') . '=[^&]*/', '', $fullUrl);
+        $fullUrl = preg_replace('/[?&]per_page=[^&]*/', '', $fullUrl);
+    }
+    $separator = (strpos($fullUrl, '?') === false) ? '?' : '&';
+    
+    $html .= '<nav class="pagination-nav" role="navigation" aria-label="Pagination">';
+    
+    // Previous button
+    $prevDisabled = ($result['page'] <= 1) ? ' disabled' : '';
+    $prevUrl = $result['page'] > 1 ? $fullUrl . $separator . $pageKey . '=' . ($result['page'] - 1) : '#';
+    $html .= '<a href="' . htmlspecialchars($prevUrl) . '" class="pagination-btn' . $prevDisabled . '" ' . ($prevDisabled ? 'tabindex="-1" aria-disabled="true"' : '') . '>';
+    $html .= '<i class="fa-solid fa-chevron-left"></i> <span class="pagination-btn-text">Previous</span>';
+    $html .= '</a>';
+    
+    // Page numbers
+    $html .= '<div class="pagination-pages">';
+    
+    $current = $result['page'];
+    $last = $result['lastPage'];
+    $startPage = max(1, $current - 2);
+    $endPage = min($last, $current + 2);
+    
+    // Always show first page
+    if ($startPage > 1) {
+        $html .= '<a href="' . htmlspecialchars($fullUrl . $separator . $pageKey . '=1') . '" class="pagination-page">1</a>';
+        if ($startPage > 2) {
+            $html .= '<span class="pagination-ellipsis">&hellip;</span>';
+        }
+    }
+    
+    // Show pages around current
+    for ($i = $startPage; $i <= $endPage; $i++) {
+        $activeClass = ($i === $current) ? ' active' : '';
+        $html .= '<a href="' . htmlspecialchars($fullUrl . $separator . $pageKey . '=' . $i) . '" class="pagination-page' . $activeClass . '">' . $i . '</a>';
+    }
+    
+    // Always show last page
+    if ($endPage < $last) {
+        if ($endPage < $last - 1) {
+            $html .= '<span class="pagination-ellipsis">&hellip;</span>';
+        }
+        $html .= '<a href="' . htmlspecialchars($fullUrl . $separator . $pageKey . '=' . $last) . '" class="pagination-page">' . $last . '</a>';
+    }
+    
+    $html .= '</div>';
+    
+    // Next button
+    $nextDisabled = ($result['page'] >= $result['lastPage']) ? ' disabled' : '';
+    $nextUrl = $result['page'] < $result['lastPage'] ? $fullUrl . $separator . $pageKey . '=' . ($result['page'] + 1) : '#';
+    $html .= '<a href="' . htmlspecialchars($nextUrl) . '" class="pagination-btn' . $nextDisabled . '" ' . ($nextDisabled ? 'tabindex="-1" aria-disabled="true"' : '') . '>';
+    $html .= '<span class="pagination-btn-text">Next</span> <i class="fa-solid fa-chevron-right"></i>';
+    $html .= '</a>';
+    
+    // Rows per page selector
+    $html .= '<div class="pagination-per-page">';
+    $html .= '<label for="perPageSelect">Rows:</label>';
+    $html .= '<select id="perPageSelect" class="pagination-select" onchange="window.location.href=this.value">';
+    $perPageOptions = [10, 20, 50, 100];
+    foreach ($perPageOptions as $pp) {
+        $sel = ($pp === $result['perPage']) ? ' selected' : '';
+        $ppUrl = preg_replace('/[?&]per_page=[^&]*/', '', $fullUrl);
+        $ppSep = (strpos($ppUrl, '?') === false) ? '?' : '&';
+        $html .= '<option value="' . htmlspecialchars($ppUrl . $ppSep . 'per_page=' . $pp . '&' . $pageKey . '=1') . '"' . $sel . '>' . $pp . '</option>';
+    }
+    $html .= '</select>';
+    $html .= '</div>';
+    
+    $html .= '</nav>';
+    $html .= '</div>';
+    
+    return $html;
+}
+
+/**
+ * Get pagination state from GET parameters with validation.
+ * Returns [$page, $perPage]
+ */
+function get_pagination_state() {
+    $page = get_current_page('page');
+    $perPage = get_per_page('per_page');
+    return [$page, $perPage];
+}
 
 ?>
 

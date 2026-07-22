@@ -61,7 +61,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } elseif ($otp_result === true) {
                 // OTP is valid — create the user account
                 try {
-                    $stmt = $pdo->prepare("INSERT INTO users (name, email, address, phone, password, role, profile_photo) VALUES (?, ?, ?, ?, ?, ?, ?)");
+                    $accountType = $reg_data['account_type'] ?? 'personal';
+                    
+                    $sql = "INSERT INTO users (name, email, address, phone, password, role, profile_photo, account_type, org_name, org_registration, org_certificate, org_type, org_district, org_ward) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                    $stmt = $pdo->prepare($sql);
                     $stmt->execute([
                         $reg_data['name'],
                         $reg_data['email'],
@@ -69,13 +72,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $reg_data['phone'],
                         $reg_data['password_hash'],
                         'user',
-                        $reg_data['profile_photo']
+                        $reg_data['profile_photo'],
+                        $accountType,
+                        $reg_data['org_name'] ?? null,
+                        $reg_data['org_registration'] ?? null,
+                        $reg_data['org_certificate'] ?? null,
+                        $reg_data['org_type'] ?? null,
+                        $reg_data['org_district'] ?? null,
+                        $reg_data['org_ward'] ?? null,
                     ]);
 
-                    // Send welcome notification
                     $new_user_id = $pdo->lastInsertId();
+                    
+                    // If NGO, notify admin(s) about pending verification
+                    if ($accountType === 'ngo') {
+                        $adminStmt = $pdo->query("SELECT id FROM users WHERE role = 'admin' LIMIT 5");
+                        $admins = $adminStmt->fetchAll(PDO::FETCH_COLUMN);
+                        $orgName = $reg_data['org_name'] ?? $reg_data['name'];
+                        foreach ($admins as $adminId) {
+                            create_notification($pdo, (int)$adminId, 'ngo_verification_needed',
+                                'New NGO registration pending: "' . $orgName . '". Please review their details in the admin panel.',
+                                'admin/admin.php?section=ngo-verification', false);
+                        }
+                    }
+                    
+                    // Send welcome notification
                     create_notification($pdo, $new_user_id, 'registration',
-                        'Welcome to Sayog, ' . $reg_data['name'] . '! Your email has been verified and your account created successfully.',
+                        'Welcome to Sayog, ' . $reg_data['name'] . '! Your email has been verified and your account created successfully.' . 
+                        ($accountType === 'ngo' ? ' Your organization details have been submitted for verification.' : ''),
                         'login.php', true);
 
                     // Clear registration data
@@ -85,7 +109,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     redirect('login.php');
                 } catch (PDOException $e) {
                     $errors[] = "Failed to create account: " . $e->getMessage();
-                }                } else {
+                }
+            } else {
             $errors[] = "Invalid OTP. Please check the code and try again. (Max 5 attempts)";
         }
         }

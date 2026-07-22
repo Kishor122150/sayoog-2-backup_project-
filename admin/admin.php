@@ -7,7 +7,7 @@ require_once '../config.php';
 
 $section = sanitize($_GET['section'] ?? 'dashboard');
 $valid_sections = ['dashboard', 'users', 'products', 'cms', 'listing_requests', 'contact_messages',
-    'smtp', 'donations', 'volunteers', 'volunteer_deliveries', 'team', 'chatbot'];
+    'smtp', 'donations', 'volunteers', 'volunteer_deliveries', 'team', 'chatbot', 'ngo-verification', 'notifications'];
 if (!in_array($section, $valid_sections)) {
     $section = 'dashboard';
 }
@@ -227,6 +227,63 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         redirect('admin.php?section=volunteer_deliveries&del_status=' . urlencode($_POST['del_status'] ?? ''));
     }
 
+    // ── NGO VERIFICATION ACTIONS ──
+    if ($action === 'verify_ngo') {
+        $user_id = intval($_POST['user_id'] ?? 0);
+        if ($user_id > 0) {
+            $stmt = $pdo->prepare("UPDATE users SET org_verified = 1, org_verified_at = NOW(), org_verified_by = ?, display_as_org = 1 WHERE id = ? AND account_type = 'ngo'");
+            $stmt->execute([$_SESSION['user_id'] ?? 0, $user_id]);
+            
+            $pdo->prepare("INSERT IGNORE INTO user_badges (user_id, badge_type, badge_label, badge_icon, badge_color, awarded_by) VALUES (?, 'ngo_verified', 'Verified NGO', 'fa-building-columns', '#059669', ?)")
+                ->execute([$user_id, $_SESSION['user_id'] ?? 0]);
+            
+            create_notification($pdo, $user_id, 'ngo_verified',
+                'Congratulations! Your organization has been verified. Your posts will now display the verified NGO badge.',
+                'dashboard.php?page=profile', true);
+            set_flash_message('success', 'NGO verified successfully. Badge awarded and user notified.');
+        }
+        redirect('admin.php?section=ngo-verification');
+    }
+
+    if ($action === 'reject_ngo') {
+        $user_id = intval($_POST['user_id'] ?? 0);
+        $reason = sanitize($_POST['reject_reason'] ?? 'Verification documents incomplete');
+        if ($user_id > 0) {
+            $stmt = $pdo->prepare("UPDATE users SET org_verified = -1, org_verified_at = NOW(), org_verified_by = ? WHERE id = ? AND account_type = 'ngo'");
+            $stmt->execute([$_SESSION['user_id'] ?? 0, $user_id]);
+            
+            create_notification($pdo, $user_id, 'ngo_rejected',
+                'Your organization verification was not approved. Reason: ' . $reason . '. You can update your details and re-submit from your profile.',
+                'dashboard.php?page=profile', true);
+            set_flash_message('info', 'NGO verification rejected. User notified.');
+        }
+        redirect('admin.php?section=ngo-verification');
+    }
+
+    // ── ADMIN NOTIFICATION ACTIONS ──
+    if ($action === 'mark_notification_read') {
+        $notif_id = intval($_POST['notif_id'] ?? 0);
+        if ($notif_id > 0) {
+            $pdo->prepare("UPDATE notifications SET is_read = 1 WHERE id = ?")->execute([$notif_id]);
+        }
+        redirect('admin.php?section=notifications');
+    }
+    
+    if ($action === 'mark_all_notifications_read') {
+        $pdo->exec("UPDATE notifications SET is_read = 1 WHERE is_read = 0");
+        set_flash_message('success', 'All notifications marked as read.');
+        redirect('admin.php?section=notifications');
+    }
+    
+    if ($action === 'delete_notification') {
+        $notif_id = intval($_POST['notif_id'] ?? 0);
+        if ($notif_id > 0) {
+            $pdo->prepare("DELETE FROM notifications WHERE id = ?")->execute([$notif_id]);
+            set_flash_message('info', 'Notification deleted.');
+        }
+        redirect('admin.php?section=notifications');
+    }
+
     // ── TEAM MEMBER ACTIONS ──
     if ($action === 'create_team_member' || $action === 'update_team_member') {
         $name = sanitize($_POST['name'] ?? '');
@@ -318,23 +375,121 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
+// ── PAGINATION STATE ──
+list($page, $perPage) = get_pagination_state();
+
+// ── STAT COUNTS (always fetch full counts) ──
 $user_count = $pdo->query("SELECT COUNT(*) FROM users")->fetchColumn();
 $unread_notification_count = $pdo->query("SELECT COUNT(*) FROM notifications WHERE is_read = 0")->fetchColumn();
 $pending_request_count = $pdo->query("SELECT COUNT(*) FROM requests WHERE status = 'pending'")->fetchColumn();
 $active_donation_count = $pdo->query("SELECT COUNT(*) FROM donations WHERE verification_status = 'approved' AND status IN ('available', 'requested', 'accepted')")->fetchColumn();
-$users = $pdo->query("SELECT id, name, email, role, created_at FROM users ORDER BY created_at DESC")->fetchAll();
-$products = $pdo->query("SELECT * FROM products ORDER BY created_at DESC")->fetchAll();
+
+// ── PAGINATED DATA ──
+$usersResult = paginate($pdo,
+    "SELECT id, name, email, role, created_at FROM users",
+    "SELECT COUNT(*) FROM users",
+    [], $page, $perPage, 'created_at DESC'
+);
+$users = $usersResult['data'];
+
+$productsResult = paginate($pdo,
+    "SELECT * FROM products",
+    "SELECT COUNT(*) FROM products",
+    [], $page, $perPage, 'created_at DESC'
+);
+$products = $productsResult['data'];
+
 $pages = $pdo->query("SELECT * FROM cms_pages ORDER BY created_at DESC")->fetchAll();
+
 $pending_donations = $pdo->query("SELECT d.*, u.name AS donor_name, u.email AS donor_email, u.address AS donor_address, u.phone AS donor_phone FROM donations d JOIN users u ON d.donor_id = u.id WHERE d.verification_status = 'pending' ORDER BY d.created_at DESC")->fetchAll();
-$all_donations = $pdo->query("SELECT d.*, u.name AS donor_name, u.email AS donor_email, u.address AS donor_address, u.phone AS donor_phone FROM donations d JOIN users u ON d.donor_id = u.id ORDER BY d.created_at DESC")->fetchAll();
+
+$donationsResult = paginate($pdo,
+    "SELECT d.*, u.name AS donor_name, u.email AS donor_email, u.address AS donor_address, u.phone AS donor_phone FROM donations d JOIN users u ON d.donor_id = u.id",
+    "SELECT COUNT(*) FROM donations",
+    [], $page, $perPage, 'd.created_at DESC'
+);
+$all_donations = $donationsResult['data'];
+
 $recent_donations = $pdo->query("SELECT d.*, u.name AS donor_name FROM donations d JOIN users u ON d.donor_id = u.id ORDER BY d.created_at DESC LIMIT 6")->fetchAll();
+
 $volunteer_counts = get_volunteer_counts($pdo);
-$volunteers_pending = get_volunteers_by_status($pdo, 'pending');
-$volunteers_approved = get_volunteers_by_status($pdo, 'approved');
-$volunteers_rejected = get_volunteers_by_status($pdo, 'rejected');
-$volunteers_suspended = get_volunteers_by_status($pdo, 'suspended');
+// Paginated volunteer queries
+$vpgnPage = max(1, intval($_GET['vpgn'] ?? 1));
+$vpgnPerPage = max(1, min(100, intval($_GET['per_page'] ?? 10)));
+$volResult_pending = paginate($pdo,
+    "SELECT v.*, u.name AS user_name, u.email AS user_email FROM volunteers v JOIN users u ON v.user_id = u.id WHERE v.status = 'pending'",
+    "SELECT COUNT(*) FROM volunteers v WHERE v.status = 'pending'",
+    [], $vpgnPage, $vpgnPerPage, 'v.created_at DESC'
+);
+$volunteers_pending = $volResult_pending['data'];
+$volResult_approved = paginate($pdo,
+    "SELECT v.*, u.name AS user_name, u.email AS user_email FROM volunteers v JOIN users u ON v.user_id = u.id WHERE v.status = 'approved'",
+    "SELECT COUNT(*) FROM volunteers v WHERE v.status = 'approved'",
+    [], $vpgnPage, $vpgnPerPage, 'v.created_at DESC'
+);
+$volunteers_approved = $volResult_approved['data'];
+$volResult_rejected = paginate($pdo,
+    "SELECT v.*, u.name AS user_name, u.email AS user_email FROM volunteers v JOIN users u ON v.user_id = u.id WHERE v.status = 'rejected'",
+    "SELECT COUNT(*) FROM volunteers v WHERE v.status = 'rejected'",
+    [], $vpgnPage, $vpgnPerPage, 'v.created_at DESC'
+);
+$volunteers_rejected = $volResult_rejected['data'];
+$volResult_suspended = paginate($pdo,
+    "SELECT v.*, u.name AS user_name, u.email AS user_email FROM volunteers v JOIN users u ON v.user_id = u.id WHERE v.status = 'suspended'",
+    "SELECT COUNT(*) FROM volunteers v WHERE v.status = 'suspended'",
+    [], $vpgnPage, $vpgnPerPage, 'v.created_at DESC'
+);
+$volunteers_suspended = $volResult_suspended['data'];
+
 $team_members = $pdo->query("SELECT * FROM team_members WHERE status = 'active' ORDER BY display_order ASC, created_at DESC")->fetchAll();
-$all_team_members = $pdo->query("SELECT * FROM team_members ORDER BY display_order ASC, created_at DESC")->fetchAll();
+
+$teamResult = paginate($pdo,
+    "SELECT * FROM team_members",
+    "SELECT COUNT(*) FROM team_members",
+    [], $page, $perPage, 'display_order ASC, created_at DESC'
+);
+$all_team_members = $teamResult['data'];
+
+// NGO count queries for stats
+$ngoPendingCountTotal = (int)$pdo->query("SELECT COUNT(*) FROM users WHERE account_type = 'ngo' AND org_verified = 0")->fetchColumn();
+$ngoVerifiedCountTotal = (int)$pdo->query("SELECT COUNT(*) FROM users WHERE account_type = 'ngo' AND org_verified = 1")->fetchColumn();
+$ngoAllCountTotal = (int)$pdo->query("SELECT COUNT(*) FROM users WHERE account_type = 'ngo'")->fetchColumn();
+// Paginated NGO queries
+$npgnPage = max(1, intval($_GET['npgn'] ?? 1));
+$npgnPerPage = max(1, min(100, intval($_GET['per_page'] ?? 10)));
+$ngoResult_pending = paginate($pdo,
+    "SELECT u.* FROM users u WHERE u.account_type = 'ngo' AND u.org_verified = 0",
+    "SELECT COUNT(*) FROM users u WHERE u.account_type = 'ngo' AND u.org_verified = 0",
+    [], $npgnPage, $npgnPerPage, 'u.created_at DESC'
+);
+$ngoPending = $ngoResult_pending['data'];
+$ngoResult_verified = paginate($pdo,
+    "SELECT u.* FROM users u WHERE u.account_type = 'ngo' AND u.org_verified = 1",
+    "SELECT COUNT(*) FROM users u WHERE u.account_type = 'ngo' AND u.org_verified = 1",
+    [], $npgnPage, $npgnPerPage, 'u.org_verified_at DESC'
+);
+$ngoVerified = $ngoResult_verified['data'];
+$ngoAll = []; // Not used for list display, counts used separately
+$ngoAllCountNgo = $ngoAllCountTotal; // For backward compatibility
+
+// Admin notifications data
+$notificationsResult = paginate($pdo,
+    "SELECT n.*, u.name AS user_name, u.email AS user_email FROM notifications n JOIN users u ON n.user_id = u.id",
+    "SELECT COUNT(*) FROM notifications",
+    [], $page, $perPage, 'n.created_at DESC'
+);
+$all_notifications = $notificationsResult['data'];
+
+$unread_notifications = $pdo->query("SELECT n.*, u.name AS user_name, u.email AS user_email FROM notifications n JOIN users u ON n.user_id = u.id WHERE n.is_read = 0 ORDER BY n.created_at DESC LIMIT 50")->fetchAll();
+$recent_notifications_topbar = $pdo->query("SELECT n.*, u.name AS user_name FROM notifications n JOIN users u ON n.user_id = u.id WHERE n.is_read = 0 ORDER BY n.created_at DESC LIMIT 6")->fetchAll();
+
+// Contact messages paginated
+$contactResult = paginate($pdo,
+    "SELECT * FROM contact_messages",
+    "SELECT COUNT(*) FROM contact_messages",
+    [], $page, $perPage, 'created_at DESC'
+);
+$contact_messages = $contactResult['data'];
 ?>
 
 <?php
@@ -585,89 +740,176 @@ $cms_tab = sanitize($_GET['cms_tab'] ?? 'homepage');
     <!-- ========== SIDEBAR ========== -->
     <aside class="admin-sidebar" id="adminSidebar">
 
+        <!-- Sidebar Header -->
         <div class="sidebar-header">
-            <div class="sidebar-logo-icon">
-                <i class="fa-solid fa-shield-halved"></i>
+            <div class="sidebar-logo">
+                <div class="sidebar-logo-icon">
+                    <i class="fa-solid fa-shield-halved"></i>
+                </div>
+                <div class="sidebar-logo-text">
+                    <a href="admin.php">Sayog</a>
+                    <span class="sidebar-badge">Admin</span>
+                </div>
             </div>
-            <a href="admin.php" class="sidebar-logo-text">Sayog <span>Admin</span></a>
         </div>
 
+        <!-- Premium Profile Card -->
         <div class="sidebar-profile">
-            <div class="sidebar-avatar">
-                <i class="fa-solid fa-user-shield"></i>
-            </div>
-            <div class="sidebar-user-info">
-                <div class="sidebar-user-name">Administrator</div>
-                <div class="sidebar-user-role"><i class="fa-solid fa-crown"></i> Super Admin</div>
+            <div class="sidebar-profile-main">
+                <div class="sidebar-avatar-wrapper">
+                    <div class="sidebar-avatar">
+                        <span>A</span>
+                    </div>
+                    <span class="sidebar-online-dot"></span>
+                </div>
+                <div class="sidebar-user-info">
+                    <div class="sidebar-user-name">Administrator</div>
+                    <div class="sidebar-user-role">
+                        <span class="role-badge">
+                            <i class="fa-solid fa-crown"></i> Super Admin
+                        </span>
+                    </div>
+                </div>
             </div>
         </div>
 
-        <nav class="sidebar-nav">
+        <?php
+        // ── Data-Driven Sidebar Menu Configuration ──
+        $sidebar_menu = [
+            // Single items (no children)
+            'dashboard' => [
+                'icon' => 'fa-solid fa-gauge-high',
+                'label' => 'Dashboard',
+                'section' => 'dashboard',
+                'badge' => null,
+            ],
 
-            <div class="nav-section-label">Main</div>
+            // Accordion groups
+            'donation_group' => [
+                'icon' => 'fa-solid fa-hand-holding-heart',
+                'label' => 'Donations',
+                'children' => [
+                    ['section' => 'donations', 'label' => 'All Donations', 'icon' => 'fa-solid fa-list', 'badge' => count($pending_donations) > 0 ? count($pending_donations) : null],
+                ],
+            ],
 
-            <a href="admin.php?section=dashboard" class="<?php echo $section === 'dashboard' ? 'active' : ''; ?>">
-                <i class="fa-solid fa-gauge-high"></i> Dashboard
-            </a>
+            'user_group' => [
+                'icon' => 'fa-solid fa-users-gear',
+                'label' => 'Users',
+                'children' => [
+                    ['section' => 'users', 'label' => 'All Users', 'icon' => 'fa-solid fa-users'],
+                    ['section' => 'volunteers', 'label' => 'Volunteers', 'icon' => 'fa-solid fa-hand-holding-heart', 'badge' => (isset($volunteer_counts['pending']) && $volunteer_counts['pending'] > 0) ? (int)$volunteer_counts['pending'] : null],
+                    ['section' => 'ngo-verification', 'label' => 'NGO Verification', 'icon' => 'fa-solid fa-building-columns', 'badge' => $ngoPendingCountTotal > 0 ? $ngoPendingCountTotal : null],
+                    ['section' => 'team', 'label' => 'Team Members', 'icon' => 'fa-solid fa-people-group'],
+                ],
+            ],
 
-            <a href="admin.php?section=donations" class="<?php echo $section === 'donations' ? 'active' : ''; ?>">
-                <i class="fa-solid fa-hand-holding-heart"></i> Donations
-                <?php if (count($pending_donations) > 0): ?>
-                    <span class="nav-badge"><?php echo count($pending_donations); ?></span>
+            'delivery_group' => [
+                'icon' => 'fa-solid fa-truck-fast',
+                'label' => 'Deliveries',
+                'children' => [
+                    ['section' => 'volunteer_deliveries', 'label' => 'Volunteer Deliveries', 'icon' => 'fa-solid fa-truck'],
+                ],
+            ],
+
+            'communication_group' => [
+                'icon' => 'fa-solid fa-comments',
+                'label' => 'Communication',
+                'children' => [
+                    ['section' => 'contact_messages', 'label' => 'Contact Messages', 'icon' => 'fa-solid fa-envelope'],
+                    ['section' => 'notifications', 'label' => 'Notifications', 'icon' => 'fa-solid fa-bell', 'badge' => $unread_notification_count > 0 ? (int)$unread_notification_count : null],
+                ],
+            ],
+
+            'content_group' => [
+                'icon' => 'fa-solid fa-newspaper',
+                'label' => 'Content',
+                'children' => [
+                    ['section' => 'cms', 'label' => 'CMS Editor', 'icon' => 'fa-solid fa-file-lines'],
+                    ['section' => 'products', 'label' => 'Products', 'icon' => 'fa-solid fa-cube'],
+                ],
+            ],
+
+            'system_group' => [
+                'icon' => 'fa-solid fa-sliders',
+                'label' => 'System',
+                'children' => [
+                    ['section' => 'chatbot', 'label' => 'AI Chatbot', 'icon' => 'fa-solid fa-robot'],
+                    ['section' => 'smtp', 'label' => 'SMTP Config', 'icon' => 'fa-solid fa-gear'],
+                ],
+            ],
+        ];
+
+        // Determine which groups should be expanded (current section is in a child)
+        $expanded_groups = [];
+        foreach ($sidebar_menu as $key => $group) {
+            if (isset($group['children'])) {
+                foreach ($group['children'] as $child) {
+                    if ($child['section'] === $section) {
+                        $expanded_groups[] = $key;
+                        break;
+                    }
+                }
+            }
+        }
+        ?>
+
+        <!-- Sidebar Navigation -->
+        <nav class="sidebar-nav" id="sidebarNav">
+
+            <?php foreach ($sidebar_menu as $key => $item): ?>
+                <?php if (!isset($item['children'])): ?>
+                    <!-- Single nav item -->
+                    <a href="admin.php?section=<?php echo $item['section']; ?>"
+                       class="nav-item nav-single <?php echo $section === $item['section'] ? 'active' : ''; ?>">
+                        <span class="nav-indicator"></span>
+                        <i class="<?php echo $item['icon']; ?>"></i>
+                        <span class="nav-label"><?php echo $item['label']; ?></span>
+                    </a>
+                <?php else: ?>
+                    <!-- Accordion group -->
+                    <div class="nav-group" data-group="<?php echo $key; ?>">
+                        <button class="nav-item nav-group-toggle" type="button"
+                            aria-expanded="false"
+                            <?php if (in_array($key, $expanded_groups)): ?>data-auto-expand="true"<?php endif; ?>>
+                            <span class="nav-indicator"></span>
+                            <i class="<?php echo $item['icon']; ?>"></i>
+                            <span class="nav-label"><?php echo $item['label']; ?></span>
+                            <i class="fa-solid fa-chevron-down nav-group-arrow"></i>
+                        </button>
+                        <div class="nav-group-content">
+                            <?php foreach ($item['children'] as $child): ?>
+                                <a href="admin.php?section=<?php echo $child['section']; ?>"
+                                   class="nav-child <?php echo $section === $child['section'] ? 'active' : ''; ?>">
+                                    <span class="nav-child-indicator"></span>
+                                    <i class="<?php echo $child['icon'] ?? 'fa-solid fa-circle'; ?>"></i>
+                                    <span class="nav-label"><?php echo $child['label']; ?></span>
+                                    <?php if (!empty($child['badge'])): ?>
+                                        <span class="nav-badge"><?php echo $child['badge']; ?></span>
+                                    <?php endif; ?>
+                                </a>
+                            <?php endforeach; ?>
+                        </div>
+                    </div>
                 <?php endif; ?>
-            </a>
+            <?php endforeach; ?>
 
-            <div class="nav-section-label">Management</div>
+            <!-- Separator -->
+            <div class="nav-separator"></div>
 
-            <a href="admin.php?section=volunteers" class="<?php echo $section === 'volunteers' ? 'active' : ''; ?>">
-                <i class="fa-solid fa-hand-holding-heart"></i> Volunteers
-                <?php if (isset($volunteer_counts['pending']) && $volunteer_counts['pending'] > 0): ?>
-                    <span class="nav-badge"><?php echo (int)$volunteer_counts['pending']; ?></span>
-                <?php endif; ?>
-            </a>
-
-            <a href="admin.php?section=volunteer_deliveries" class="<?php echo $section === 'volunteer_deliveries' ? 'active' : ''; ?>">
-                <i class="fa-solid fa-truck-fast"></i> Volunteer Deliveries
-            </a>
-
-
-            <a href="admin.php?section=team" class="<?php echo $section === 'team' ? 'active' : ''; ?>">
-                <i class="fa-solid fa-people-group"></i> Team
-            </a>
-
-            <a href="admin.php?section=users" class="<?php echo $section === 'users' ? 'active' : ''; ?>">
-                <i class="fa-solid fa-users"></i> Users
-            </a>
-
-            <a href="admin.php?section=contact_messages" class="<?php echo $section === 'contact_messages' ? 'active' : ''; ?>">
-                <i class="fa-solid fa-envelope"></i> Contact Messages
-            </a>
-
-            <a href="admin.php?section=cms" class="<?php echo $section === 'cms' ? 'active' : ''; ?>">
-                <i class="fa-solid fa-file-lines"></i> CMS Editor
-            </a>
-
-            <a href="admin.php?section=smtp" class="<?php echo $section === 'smtp' ? 'active' : ''; ?>">
-                <i class="fa-solid fa-gear"></i> SMTP Config
-            </a>
-
-            <div class="nav-section-label">Chatbot</div>
-
-            <a href="admin.php?section=chatbot" class="<?php echo $section === 'chatbot' ? 'active' : ''; ?>">
-                <i class="fa-solid fa-robot"></i> AI Chatbot
-            </a>
-
-            <div class="nav-section-label">Other</div>
-
-            <a href="../dashboard.php">
-                <i class="fa-solid fa-arrow-up-right-from-square"></i> User Dashboard
+            <a href="../dashboard.php" class="nav-item nav-single">
+                <span class="nav-indicator"></span>
+                <i class="fa-solid fa-arrow-up-right-from-square"></i>
+                <span class="nav-label">User Dashboard</span>
             </a>
 
         </nav>
 
-        <div class="sidebar-logout">
-            <a href="../logout.php">
-                <i class="fa-solid fa-right-from-bracket"></i> Sign Out
+        <!-- Sidebar Footer -->
+        <div class="sidebar-footer">
+            <a href="../logout.php" class="sidebar-logout-btn">
+                <i class="fa-solid fa-right-from-bracket"></i>
+                <span>Sign Out</span>
             </a>
         </div>
 
@@ -682,34 +924,117 @@ $cms_tab = sanitize($_GET['cms_tab'] ?? 'homepage');
                 <button class="menu-toggle" id="menuToggle" aria-label="Toggle sidebar">
                     <i class="fa-solid fa-bars"></i>
                 </button>
-                <div class="page-title">
-                    <?php
-                    $page_titles = [
-                        'dashboard' => 'Dashboard',
-                        'users' => 'Users',
-                        'products' => 'Products',
-                        'cms' => 'CMS Editor',
-                        'contact_messages' => 'Contact Messages',
-                        'donations' => 'Donation Review',
-                        'volunteers' => 'Volunteer Management',
-                        'smtp' => 'SMTP Configuration',
-                        'chatbot' => 'AI Chatbot',
-                        'volunteer_deliveries' => 'Volunteer Deliveries',
-                    ];
-                    echo $page_titles[$section] ?? 'Dashboard';
-                    ?>
+                <div class="breadcrumb-wrapper">
+                    <a href="admin.php" class="breadcrumb-home">
+                        <i class="fa-solid fa-house"></i>
+                    </a>
+                    <i class="fa-solid fa-chevron-right breadcrumb-sep"></i>
+                    <span class="page-title">
+                        <?php
+                        $page_titles = [
+                            'dashboard' => 'Dashboard',
+                            'users' => 'Users',
+                            'products' => 'Products',
+                            'cms' => 'CMS Editor',
+                            'contact_messages' => 'Contact Messages',
+                            'donations' => 'Donation Review',
+                            'volunteers' => 'Volunteer Management',
+                            'smtp' => 'SMTP Configuration',
+                            'chatbot' => 'AI Chatbot',
+                            'volunteer_deliveries' => 'Volunteer Deliveries',
+                            'ngo-verification' => 'NGO Verification',
+                            'notifications' => 'Notifications',
+                        ];
+                        echo $page_titles[$section] ?? 'Dashboard';
+                        ?>
+                    </span>
                 </div>
             </div>
             <div class="admin-topbar-right">
                 <a href="../index.php" class="topbar-btn" title="View site">
                     <i class="fa-solid fa-eye"></i>
                 </a>
-                <?php if ($unread_notification_count > 0): ?>
-                    <button class="topbar-btn" title="Notifications">
+                <button class="topbar-btn theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+                    <i class="fa-solid fa-moon"></i>
+                </button>
+                <div class="admin-notif-dropdown" id="adminNotifDropdown">
+                    <button class="topbar-btn admin-notif-trigger" id="adminNotifTrigger" title="Notifications">
                         <i class="fa-solid fa-bell"></i>
-                        <span class="dot"></span>
+                        <?php if ($unread_notification_count > 0): ?>
+                            <span class="notif-count-badge"><?php echo min($unread_notification_count, 99); ?></span>
+                        <?php endif; ?>
                     </button>
-                <?php endif; ?>
+                    <div class="admin-notif-menu" id="adminNotifMenu">
+                        <div class="admin-notif-header">
+                            <span class="admin-notif-title">
+                                <i class="fa-solid fa-bell"></i> Notifications
+                                <?php if ($unread_notification_count > 0): ?>
+                                    <span class="notif-count-inline"><?php echo (int)$unread_notification_count; ?> new</span>
+                                <?php endif; ?>
+                            </span>
+                            <?php if ($unread_notification_count > 0): ?>
+                                <form action="admin.php?section=notifications" method="POST" style="display:inline;">
+                                    <input type="hidden" name="action" value="mark_all_notifications_read">
+                                    <button type="submit" class="admin-notif-mark-read-btn">
+                                        <i class="fa-regular fa-circle-check"></i> Mark all read
+                                    </button>
+                                </form>
+                            <?php endif; ?>
+                        </div>
+                        <div class="admin-notif-list">
+                            <?php if (empty($recent_notifications_topbar)): ?>
+                                <div class="admin-notif-empty">
+                                    <div class="admin-notif-empty-icon">
+                                        <i class="fa-solid fa-check-circle"></i>
+                                    </div>
+                                    <span>All caught up! No new notifications</span>
+                                </div>
+                            <?php else: ?>
+                                <?php foreach ($recent_notifications_topbar as $notif): ?>
+                                    <?php
+                                    $notif_msg_display = htmlspecialchars(strlen($notif['message']) > 80 ? substr($notif['message'], 0, 80) . '...' : $notif['message']);
+                                    $notif_link = !empty($notif['link']) ? (preg_match('/^(https?:)?\/\//', $notif['link']) ? $notif['link'] : '../' . htmlspecialchars($notif['link'])) : 'admin.php?section=notifications';
+                                    ?>
+                                    <a href="<?php echo $notif_link; ?>" class="admin-notif-item <?php echo $notif['is_read'] ? 'read' : 'unread'; ?>">
+                                        <div class="admin-notif-dot"></div>
+                                        <div class="admin-notif-content">
+                                            <div class="admin-notif-msg"><?php echo $notif_msg_display; ?></div>
+                                            <div class="admin-notif-meta">
+                                                <span class="admin-notif-user"><i class="fa-solid fa-user"></i> <?php echo htmlspecialchars($notif['user_name']); ?></span>
+                                                <span class="admin-notif-time"><?php echo time_ago($notif['created_at']); ?></span>
+                                            </div>
+                                        </div>
+                                    </a>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
+                        </div>
+                        <a href="admin.php?section=notifications" class="admin-notif-footer">
+                            <span>View all notifications</span>
+                            <i class="fa-solid fa-arrow-right"></i>
+                        </a>
+                    </div>
+                </div>
+                <div class="topbar-user-dropdown">
+                    <button class="topbar-user-btn" id="topbarUserBtn" title="Admin menu">
+                        <div class="topbar-user-avatar">A</div>
+                        <div class="topbar-user-info">
+                            <span class="topbar-user-name">Administrator</span>
+                            <span class="topbar-user-role">Super Admin</span>
+                        </div>
+                        <i class="fa-solid fa-chevron-down topbar-user-arrow"></i>
+                    </button>
+                    <div class="topbar-user-menu" id="topbarUserMenu">
+                        <a href="../dashboard.php" class="topbar-user-menu-item">
+                            <i class="fa-solid fa-arrow-up-right-from-square"></i>
+                            <span>User Dashboard</span>
+                        </a>
+                        <div class="topbar-user-menu-divider"></div>
+                        <a href="../logout.php" class="topbar-user-menu-item danger">
+                            <i class="fa-solid fa-right-from-bracket"></i>
+                            <span>Sign Out</span>
+                        </a>
+                    </div>
+                </div>
             </div>
         </header>
 
@@ -839,6 +1164,7 @@ $cms_tab = sanitize($_GET['cms_tab'] ?? 'homepage');
                                 </tbody>
                             </table>
                         </div>
+                        <?php echo render_pagination($usersResult, 'admin.php?section=users'); ?>
                     </div>
                 </div>
 
@@ -941,9 +1267,8 @@ $cms_tab = sanitize($_GET['cms_tab'] ?? 'homepage');
                                 </thead>
                                 <tbody>
                                     <?php
-                                    $stmt = $pdo->query("SELECT * FROM contact_messages ORDER BY created_at DESC");
                                     $sn = 1;
-                                    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)):
+                                    foreach ($contact_messages as $row):
                                     ?>
                                         <tr>
                                             <td data-label="#"><span class="badge badge-neutral"><?php echo $sn++; ?></span></td>
@@ -992,10 +1317,11 @@ $cms_tab = sanitize($_GET['cms_tab'] ?? 'homepage');
                                                 </div>
                                             </td>
                                         </tr>
-                                    <?php endwhile; ?>
+                                    <?php endforeach; ?>
                                 </tbody>
                             </table>
                         </div>
+                        <?php echo render_pagination($contactResult, 'admin.php?section=contact_messages'); ?>
                     </div>
                 </div>
 
@@ -1134,6 +1460,7 @@ $cms_tab = sanitize($_GET['cms_tab'] ?? 'homepage');
                                 </tbody>
                             </table>
                         </div>
+                        <?php echo render_pagination($donationsResult, 'admin.php?section=donations'); ?>
                     </div>
                 </div>
 
@@ -1300,6 +1627,14 @@ $cms_tab = sanitize($_GET['cms_tab'] ?? 'homepage');
                                     <?php endforeach; ?>
                                 </tbody>
                             </table>
+                            <?php
+                            $activeVolResult = null;
+                            if ($vol_tab === 'pending') $activeVolResult = $volResult_pending;
+                            elseif ($vol_tab === 'approved') $activeVolResult = $volResult_approved;
+                            elseif ($vol_tab === 'rejected') $activeVolResult = $volResult_rejected;
+                            elseif ($vol_tab === 'suspended') $activeVolResult = $volResult_suspended;
+                            if ($activeVolResult) echo render_pagination($activeVolResult, '/admin.php?section=volunteers&vol_tab=' . urlencode($vol_tab));
+                            ?>
                         </div>
                         <?php endif; ?>
                     </div>
@@ -2189,6 +2524,7 @@ $cms_tab = sanitize($_GET['cms_tab'] ?? 'homepage');
                                 </tbody>
                             </table>
                         </div>
+                        <?php echo render_pagination($teamResult, 'admin.php?section=team'); ?>
                         <?php endif; ?>
                     </div>
                 </div>
@@ -2803,6 +3139,336 @@ $cms_tab = sanitize($_GET['cms_tab'] ?? 'homepage');
 
             <?php endif; ?>
 
+            <!-- ============================== -->
+            <!-- NGO VERIFICATION — Premium UI   -->
+            <!-- ============================== -->
+            <?php if ($section === 'ngo-verification'): ?>
+
+                <!-- ── Premium Section Header ── -->
+                <div class="ngo-section-header">
+                    <div>
+                        <h1>
+                            <i class="fa-solid fa-building-columns"></i>
+                            <span>NGO Verification</span>
+                        </h1>
+                        <p>Review, verify, and manage NGO organization accounts with ease.</p>
+                    </div>
+                    <span class="ngo-header-badge">
+                        <i class="fa-solid fa-building-columns"></i>
+                        <?php echo $ngoAllCountTotal; ?> total NGOs
+                    </span>
+                </div>
+
+                <!-- ── Stats Grid ── -->
+                <div class="ngo-stats-grid">
+                    <div class="ngo-stat-card">
+                        <div class="ngo-stat-icon amber"><i class="fa-solid fa-clock"></i></div>
+                        <div class="ngo-stat-body">
+                            <div class="ngo-stat-value"><?php echo $ngoPendingCountTotal; ?></div>
+                            <div class="ngo-stat-label">Pending Verification</div>
+                        </div>
+                    </div>
+                    <div class="ngo-stat-card">
+                        <div class="ngo-stat-icon green"><i class="fa-solid fa-circle-check"></i></div>
+                        <div class="ngo-stat-body">
+                            <div class="ngo-stat-value"><?php echo $ngoVerifiedCountTotal; ?></div>
+                            <div class="ngo-stat-label">Verified NGOs</div>
+                        </div>
+                    </div>
+                    <div class="ngo-stat-card">
+                        <div class="ngo-stat-icon blue"><i class="fa-solid fa-building-columns"></i></div>
+                        <div class="ngo-stat-body">
+                            <div class="ngo-stat-value"><?php echo count($ngoAll); ?></div>
+                            <div class="ngo-stat-label">Total Registrations</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ── Pending NGO Verifications ── -->
+                <div class="admin-card" style="margin-bottom:24px;">
+                    <div class="admin-card-header">
+                        <h3><i class="fa-solid fa-clock"></i> Pending Verification</h3>
+                        <span class="badge badge-warning">
+                            <i class="fa-solid fa-circle"></i>
+                            <?php echo count($ngoPending); ?> pending
+                        </span>
+                    </div>
+                    <div class="admin-card-body">
+                        <?php if (empty($ngoPending)): ?>
+                            <div class="ngo-empty">
+                                <div class="ngo-empty-icon"><i class="fa-solid fa-inbox"></i></div>
+                                <h3>No pending NGO verifications</h3>
+                                <p>New NGO registrations will appear here for your review once users sign up as NGO organizations.</p>
+                            </div>
+                        <?php else: ?>
+                            <div class="ngo-pending-list">
+                            <?php foreach ($ngoPending as $ngo): ?>
+                            <div class="ngo-card">
+                                <div class="ngo-card-main">
+                                    <div class="ngo-card-info">
+                                        <div class="ngo-avatar">
+                                            <i class="fa-solid fa-building-columns"></i>
+                                        </div>
+                                        <div class="ngo-card-details">
+                                            <h4><?php echo htmlspecialchars($ngo['org_name'] ?? $ngo['name']); ?></h4>
+                                            <p class="ngo-card-meta">
+                                                <span><i class="fa-solid fa-user"></i> <?php echo htmlspecialchars($ngo['name']); ?></span>
+                                                <span class="sep">|</span>
+                                                <span><i class="fa-solid fa-envelope"></i> <?php echo htmlspecialchars($ngo['email']); ?></span>
+                                                <span class="sep">|</span>
+                                                <span><i class="fa-solid fa-calendar"></i> <?php echo date('d M Y', strtotime($ngo['created_at'])); ?></span>
+                                            </p>
+                                            <div class="ngo-tag-group">
+                                                <?php
+                                                $type = ucfirst(str_replace('_', ' ', $ngo['org_type'] ?? 'NGO'));
+                                                $district = htmlspecialchars($ngo['org_district'] ?? 'N/A');
+                                                ?>
+                                                <span class="ngo-tag ngo-tag--type"><i class="fa-solid fa-tag"></i> <?php echo $type; ?></span>
+                                                <span class="ngo-tag ngo-tag--location"><i class="fa-solid fa-location-dot"></i> <?php echo $district; ?></span>
+                                                <?php if (!empty($ngo['org_ward'])): ?>
+                                                    <span class="ngo-tag ngo-tag--location"><i class="fa-solid fa-map-pin"></i> Ward <?php echo htmlspecialchars($ngo['org_ward']); ?></span>
+                                                <?php endif; ?>
+                                                <?php if (!empty($ngo['org_reg_number'])): ?>
+                                                    <span class="ngo-tag ngo-tag--reg"><i class="fa-solid fa-hashtag"></i> <?php echo htmlspecialchars($ngo['org_reg_number']); ?></span>
+                                                <?php endif; ?>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="ngo-card-status-col">
+                                        <span class="ngo-status-badge">
+                                            <i class="fa-solid fa-circle"></i> Pending Review
+                                        </span>
+                                    </div>
+                                </div>
+
+                                <?php if (!empty($ngo['org_certificate'])): ?>
+                                <div class="ngo-cert-row">
+                                    <a href="../<?php echo htmlspecialchars($ngo['org_certificate']); ?>" target="_blank" class="ngo-cert-link">
+                                        <i class="fa-solid fa-file-lines"></i> View Registration Certificate
+                                    </a>
+                                </div>
+                                <?php endif; ?>
+
+                                <div class="ngo-card-divider"></div>
+
+                                <div class="ngo-card-actions">
+                                    <form action="admin.php?section=ngo-verification" method="POST" style="display:inline-flex;">
+                                        <input type="hidden" name="action" value="verify_ngo">
+                                        <input type="hidden" name="user_id" value="<?php echo $ngo['id']; ?>">
+                                        <button type="submit" class="ngo-btn-verify" onclick="return confirm('Verify this NGO? Their posts will display a verified badge.');">
+                                            <i class="fa-solid fa-check-circle"></i> Verify NGO
+                                        </button>
+                                    </form>
+                                    <form action="admin.php?section=ngo-verification" method="POST" class="ngo-reject-group" onsubmit="return confirm('Reject this NGO verification?');">
+                                        <input type="hidden" name="action" value="reject_ngo">
+                                        <input type="hidden" name="user_id" value="<?php echo $ngo['id']; ?>">
+                                        <input type="text" name="reject_reason" class="ngo-reject-input" placeholder="Reason for rejection..." required>
+                                        <button type="submit" class="ngo-btn-reject">
+                                            <i class="fa-solid fa-xmark-circle"></i> Reject
+                                        </button>
+                                    </form>
+                                </div>
+                            </div>
+                            <?php endforeach; ?>
+                            </div>
+                            <?php echo render_pagination($ngoResult_pending, '/admin.php?section=ngo-verification&ngo_tab=pending'); ?>
+                        <?php endif; ?>
+                    </div>
+                </div>
+
+                <!-- ── Verified NGOs ── -->
+                <div class="admin-card">
+                    <div class="admin-card-header">
+                        <h3><i class="fa-solid fa-circle-check"></i> Verified NGOs</h3>
+                        <span class="badge badge-success">
+                            <i class="fa-solid fa-check-circle"></i>
+                            <?php echo count($ngoVerified); ?> verified
+                        </span>
+                    </div>
+                    <div class="admin-card-body" style="padding:0;">
+                        <?php if (empty($ngoVerified)): ?>
+                            <div class="ngo-empty" style="padding:40px 24px;">
+                                <div class="ngo-empty-icon"><i class="fa-solid fa-building-columns"></i></div>
+                                <h3>No verified NGOs yet</h3>
+                                <p>Once you verify NGOs from the pending list above, they will appear here with full organization details.</p>
+                            </div>
+                        <?php else: ?>
+                        <div class="table-wrapper">
+                            <table class="modern-table">
+                                <thead>
+                                    <tr>
+                                        <th>Organization</th>
+                                        <th>Representative</th>
+                                        <th>Type</th>
+                                        <th>District</th>
+                                        <th>Verified Date</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <?php foreach ($ngoVerified as $ngo): ?>
+                                    <tr>
+                                        <td data-label="Organization">
+                                            <div class="ngo-verified-cell">
+                                                <div class="ngo-verified-icon"><i class="fa-solid fa-building-columns"></i></div>
+                                                <div>
+                                                    <div class="ngo-verified-name"><?php echo htmlspecialchars($ngo['org_name'] ?? $ngo['name']); ?></div>
+                                                    <div class="ngo-verified-email"><?php echo htmlspecialchars($ngo['email']); ?></div>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td data-label="Representative">
+                                            <span style="font-weight:500;"><?php echo htmlspecialchars($ngo['name']); ?></span>
+                                        </td>
+                                        <td data-label="Type">
+                                            <span class="badge badge-info">
+                                                <i class="fa-solid fa-tag"></i>
+                                                <?php echo htmlspecialchars(ucfirst(str_replace('_', ' ', $ngo['org_type'] ?? 'NGO'))); ?>
+                                            </span>
+                                        </td>
+                                        <td data-label="District">
+                                            <span class="ngo-table-icon">
+                                                <i class="fa-solid fa-location-dot"></i>
+                                                <?php echo htmlspecialchars($ngo['org_district'] ?? 'N/A'); ?>
+                                            </span>
+                                        </td>
+                                        <td data-label="Verified Date">
+                                            <span class="ngo-table-icon">
+                                                <i class="fa-solid fa-calendar-check"></i>
+                                                <?php echo $ngo['org_verified_at'] ? date('d M Y', strtotime($ngo['org_verified_at'])) : 'N/A'; ?>
+                                            </span>
+                                        </td>
+                                    </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                            <?php echo render_pagination($ngoResult_verified, '/admin.php?section=ngo-verification&ngo_tab=verified'); ?>
+                        </div>
+                        <?php endif; ?>
+                    </div>
+                </div>
+            <?php endif; ?>
+
+            <!-- ============================== -->
+            <!-- NOTIFICATIONS — Premium Section -->
+            <!-- ============================== -->
+            <?php if ($section === 'notifications'): ?>
+
+                <!-- Section Header -->
+                <div class="ngo-section-header" style="margin-bottom:24px;">
+                    <div>
+                        <h1>
+                            <i class="fa-solid fa-bell"></i>
+                            <span>Notifications</span>
+                        </h1>
+                        <p>View and manage all system-wide notifications and recent activities.</p>
+                    </div>
+                    <span class="ngo-header-badge">
+                        <i class="fa-solid fa-bell"></i>
+                        <?php echo (int)$unread_notification_count; ?> unread
+                    </span>
+                </div>
+
+                <!-- Stats Summary -->
+                <div class="ngo-stats-grid" style="margin-bottom:24px;">
+                    <div class="ngo-stat-card">
+                        <div class="ngo-stat-icon amber"><i class="fa-solid fa-bell"></i></div>
+                        <div class="ngo-stat-body">
+                            <div class="ngo-stat-value"><?php echo (int)$unread_notification_count; ?></div>
+                            <div class="ngo-stat-label">Unread</div>
+                        </div>
+                    </div>
+                    <div class="ngo-stat-card">
+                        <div class="ngo-stat-icon green"><i class="fa-solid fa-check-circle"></i></div>
+                        <div class="ngo-stat-body">
+                            <div class="ngo-stat-value"><?php echo count($all_notifications); ?></div>
+                            <div class="ngo-stat-label">Total Notifications</div>
+                        </div>
+                    </div>
+                    <div class="ngo-stat-card">
+                        <div class="ngo-stat-icon blue"><i class="fa-solid fa-users"></i></div>
+                        <div class="ngo-stat-body">
+                            <?php
+                            $notif_user_count = $pdo->query("SELECT COUNT(DISTINCT user_id) FROM notifications")->fetchColumn();
+                            ?>
+                            <div class="ngo-stat-value"><?php echo (int)$notif_user_count; ?></div>
+                            <div class="ngo-stat-label">Affected Users</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Notifications Card -->
+                <div class="admin-card" style="margin-bottom:24px;">
+                    <div class="admin-card-header">
+                        <h3><i class="fa-solid fa-list"></i> All Notifications</h3>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                            <?php if ($unread_notification_count > 0): ?>
+                                <form action="admin.php?section=notifications" method="POST" style="display:inline;">
+                                    <input type="hidden" name="action" value="mark_all_notifications_read">
+                                    <button type="submit" class="btn btn-sm btn-primary">
+                                        <i class="fa-solid fa-check-double"></i> Mark All Read
+                                    </button>
+                                </form>
+                            <?php endif; ?>
+                            <span class="badge badge-info"><i class="fa-solid fa-bell"></i> <?php echo count($all_notifications); ?> total</span>
+                        </div>
+                    </div>
+                    <div class="admin-card-body" style="padding:0;">
+                        <?php if (empty($all_notifications)): ?>
+                            <div class="ngo-empty" style="padding:48px 24px;">
+                                <div class="ngo-empty-icon"><i class="fa-solid fa-bell-slash"></i></div>
+                                <h3>No notifications yet</h3>
+                                <p>System notifications will appear here as activities happen across the platform.</p>
+                            </div>
+                        <?php else: ?>
+                            <div class="notif-list">
+                                <?php foreach ($all_notifications as $notif): ?>
+                                    <div class="notif-item <?php echo $notif['is_read'] ? 'notif-read' : 'notif-unread'; ?>">
+                                        <div class="notif-indicator <?php echo $notif['is_read'] ? '' : 'notif-unread-dot'; ?>"></div>
+                                        <div class="notif-icon-wrap">
+                                            <i class="fa-solid fa-bell"></i>
+                                        </div>
+                                        <div class="notif-body">
+                                            <div class="notif-message"><?php echo htmlspecialchars($notif['message']); ?></div>
+                                            <div class="notif-meta">
+                                                <span class="notif-user"><i class="fa-solid fa-user"></i> <?php echo htmlspecialchars($notif['user_name'] ?? 'System'); ?></span>
+                                                <span class="notif-type">
+                                                    <i class="fa-solid fa-tag"></i> 
+                                                    <?php echo htmlspecialchars(ucfirst(str_replace('_', ' ', $notif['type']))); ?>
+                                                </span>
+                                                <span class="notif-time"><i class="fa-regular fa-clock"></i> <?php echo time_ago($notif['created_at']); ?></span>
+                                            </div>
+                                        </div>
+                                        <div class="notif-actions">
+                                            <?php if (!$notif['is_read']): ?>
+                                                <form action="admin.php?section=notifications" method="POST" style="display:inline;">
+                                                    <input type="hidden" name="action" value="mark_notification_read">
+                                                    <input type="hidden" name="notif_id" value="<?php echo $notif['id']; ?>">
+                                                    <button type="submit" class="btn btn-sm btn-outline" title="Mark as read">
+                                                        <i class="fa-solid fa-check"></i>
+                                                    </button>
+                                                </form>
+                                            <?php endif; ?>
+                                            <form action="admin.php?section=notifications" method="POST" style="display:inline;" onsubmit="return confirm('Delete this notification?');">
+                                                <input type="hidden" name="action" value="delete_notification">
+                                                <input type="hidden" name="notif_id" value="<?php echo $notif['id']; ?>">
+                                                <button type="submit" class="btn btn-sm btn-secondary" title="Delete">
+                                                    <i class="fa-solid fa-trash-can"></i>
+                                                </button>
+                                            </form>
+                                            <?php if (!empty($notif['link'])): ?>
+                                                <a href="../<?php echo htmlspecialchars($notif['link']); ?>" class="btn btn-sm btn-info" title="View">
+                                                    <i class="fa-solid fa-external-link-alt"></i>
+                                                </a>
+                                            <?php endif; ?>
+                                        </div>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                            <?php echo render_pagination($notificationsResult, 'admin.php?section=notifications'); ?>
+                        <?php endif; ?>
+                    </div>
+                </div>
+            <?php endif; ?>
         </div>
     </main>
 </div>
@@ -2840,6 +3506,30 @@ document.addEventListener('DOMContentLoaded', () => {
             closeSidebar();
         }
     });
+
+    // ── Notification Dropdown Toggle ──
+    const notifTrigger = document.getElementById('adminNotifTrigger');
+    const notifMenu = document.getElementById('adminNotifMenu');
+
+    if (notifTrigger && notifMenu) {
+        notifTrigger.addEventListener('click', (e) => {
+            e.stopPropagation();
+            notifMenu.classList.toggle('open');
+        });
+
+        document.addEventListener('click', (e) => {
+            const dropdown = document.getElementById('adminNotifDropdown');
+            if (dropdown && !dropdown.contains(e.target)) {
+                notifMenu.classList.remove('open');
+            }
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && notifMenu.classList.contains('open')) {
+                notifMenu.classList.remove('open');
+            }
+        });
+    }
 });
 </script>
 
@@ -3045,5 +3735,4 @@ document.addEventListener('DOMContentLoaded', () => {
                 </script>
             <?php endif; ?>
 
-            <!-- Enhanced volunteer section now renders above (inside admin-content) -->
-        </html>
+            <!-- ============================== -->

@@ -1,9 +1,9 @@
 <?php
-require_once 'config.php';
+require_once '../config.php';
 
 // If already logged in, redirect to dashboard
 if (is_logged_in()) {
-    redirect('dashboard.php');
+    redirect('../dashboard.php');
 }
 
 $errors = [];
@@ -46,9 +46,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $_SESSION['org_name'] = $user['org_name'] ?? null;
                     $_SESSION['display_as_org'] = $user['display_as_org'] ?? 0;
                     if (!empty($redirect) && strpos($redirect, 'http') !== 0 && strpos($redirect, '//') !== 0) {
+                        // Ensure redirect stays within the site
+                        if (strpos($redirect, '../') !== 0) {
+                            $redirect = '../' . $redirect;
+                        }
                         redirect($redirect);
                     }
-                    redirect('dashboard.php');
+                    redirect('../dashboard.php');
                 }
             } else {
                 $errors[] = "Invalid email or password combination.";
@@ -74,7 +78,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <body class="auth-wrapper">
     <div class="auth-card animate-fade-in">
         <div class="auth-header">
-            <a href="/frontend/index.php" class="auth-logo">
+            <a href="index.php" class="auth-logo">
                 <div class="auth-logo-icon">
                     <i class="fa-solid fa-hand-holding-heart"></i>
                 </div>
@@ -140,16 +144,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <span style="position: absolute; top: -10px; left: 50%; transform: translateX(-50%); background: var(--surface); padding: 0 10px; font-size: 13px; color: var(--text-secondary);">or</span>
         </div>
 
-        <!-- <a href="#" class="btn btn-block" style="background-color: white; color: #333; border: 1px solid #ddd; margin-bottom: 10px; display: flex; align-items: center; justify-content: center; gap: 8px; text-decoration: none;">
-            <img src="https://developers.google.com/identity/images/g-logo.png" alt="Google logo" width="20" height="20">
-            Sign in with Google
-        </a> -->
-
         <div class="auth-footer">
-            Don't have an account? <a href="/register.php">Sign Up</a>
+            Don't have an account? <a href="/frontend/register.php">Sign Up</a>
         </div>
         <div class="auth-footer" style="margin-top: 12px; font-size: 13px; color: var(--text-secondary);">
-            <a href="/frontend/index.php"><i class="fa-solid fa-arrow-left"></i> Back to Website</a>
+            <a href="index.php"><i class="fa-solid fa-arrow-left"></i> Back to Website</a>
         </div>
         <div class="auth-footer" style="margin-top: 12px; font-size: 13px; color: var(--text-secondary);">
             Are you an administrator? <a href="/admin/admin-login.php">Sign in to Admin Panel</a>

@@ -1,9 +1,9 @@
 <?php
-require_once 'config.php';
+require_once '../config.php';
 
 // If already logged in, redirect to dashboard
 if (is_logged_in()) {
-    redirect('dashboard.php');
+    redirect('../dashboard.php');
 }
 
 $errors = [];
@@ -106,7 +106,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // Register User — Step 1: Send OTP email first
     if (empty($errors)) {
         try {
-            // Handle profile photo upload (store temporarily as base64 in session - small files only)
+            // Handle profile photo upload
             $profile_photo = null;
             if (!empty($_FILES['profile_photo']['name'])) {
                 $photoFile = $_FILES['profile_photo'];
@@ -152,7 +152,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } else {
                 set_flash_message('info', 'Unable to send email automatically. Please use the resend option on the verification page to try again.');
             }
-            redirect('verify-otp.php');
+            redirect('../verify-otp.php');
         } catch (PDOException $e) {
             $errors[] = "Failed to process registration: " . $e->getMessage();
         }
@@ -165,15 +165,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Register | Sayog - Food Donation System</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="/style.css">
+    <link rel="stylesheet" href="/premium.css">
     <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <script src="js/app.js"></script>
+    <script src="/js/app.js"></script>
 </head>
 <body class="auth-wrapper">
     <div class="auth-card">
         <div class="auth-header">
-            <a href="#" class="auth-logo">
+            <a href="index.php" class="auth-logo">
                 <div class="auth-logo-icon">
                     <i class="fa-solid fa-hand-holding-heart"></i>
                 </div>
@@ -365,21 +366,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </form>
 
         <div class="auth-footer">
-            Already have an account? <a href="login.php">Log In</a>
+            Already have an account? <a href="/frontend/login.php">Log In</a>
         </div>
         <div class="auth-footer" style="margin-top: 12px; font-size: 13px; color: var(--text-secondary);">
             <a href="index.php"><i class="fa-solid fa-arrow-left"></i> Back to Website</a>
         </div>
     </div>
 
-    <!-- JavaScript Interactive Validations -->
     <script>
         // Account Type Selection
         function selectAccountType(type) {
             document.querySelectorAll('input[name="account_type"]').forEach(function(r) {
                 r.checked = (r.value === type);
             });
-            // Update card styles
             var cards = ['personal', 'ngo', 'other'];
             cards.forEach(function(t) {
                 var el = document.getElementById('accountType' + t.charAt(0).toUpperCase() + t.slice(1));
@@ -388,17 +387,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     el.style.background = (t === type) ? 'rgba(5,150,105,0.06)' : '';
                 }
             });
-            // Toggle NGO section
             var ngoSection = document.getElementById('ngoSection');
             if (ngoSection) {
                 ngoSection.style.display = (type === 'ngo') ? 'block' : 'none';
-                // Make NGO fields required/optional
                 document.getElementById('org_name').required = (type === 'ngo');
                 document.getElementById('org_district').required = (type === 'ngo');
             }
         }
         
-        // Init: check if NGO is already selected (e.g., after form error re-render)
         (function() {
             var selectedType = document.querySelector('input[name="account_type"]:checked');
             if (selectedType) selectAccountType(selectedType.value);
@@ -409,7 +405,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         const phoneInput = document.getElementById('phone');
         const phoneHint = document.getElementById('phone-hint');
         
-        // Checklist Rules
         const rules = {
             length: (p) => p.length >= 8,
             uppercase: (p) => /[A-Z]/.test(p),
@@ -422,12 +417,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         function updateChecklist() {
             const p = passwordInput.value;
             const c = confirmInput.value;
-
             for (const key in rules) {
                 const item = document.querySelector(`.strength-item[data-rule="${key}"]`);
                 const icon = item.querySelector('i');
                 const isValid = rules[key](p, c);
-
                 if (isValid) {
                     item.classList.add('valid');
                     item.classList.remove('invalid');
@@ -448,12 +441,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         passwordInput.addEventListener('input', updateChecklist);
         confirmInput.addEventListener('input', updateChecklist);
 
-        // Nepal Phone Live Validation
         phoneInput.addEventListener('input', function() {
             const val = phoneInput.value.trim();
             const mobilePattern = /^(98|97|96)\d{8}$/;
             const landlinePattern = /^01\d{7}$/;
-            
             if (val.length === 0) {
                 phoneHint.style.color = '';
                 phoneHint.textContent = 'Nepal mobile or landline formats only';

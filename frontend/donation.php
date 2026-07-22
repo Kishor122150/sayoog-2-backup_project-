@@ -181,7 +181,7 @@ require_once '../header.php';
                             <?php if (!is_logged_in()): ?>
                                 <div class="alert alert-info">
                                     <p style="color:#059669"><i class="fa-solid fa-circle-user" style="color:#059669"></i> Authentication required to process request.</p>
-                                    <a href="login.php?redirect=<?php echo urlencode($redirect); ?>" class="btn btn-primary " style="background: #059669; color:#fff"><i class="fa-solid fa-right-to-bracket"></i> Log in to Request</a>
+                                    <a href="/frontend/login.php?redirect=<?php echo urlencode($redirect); ?>" class="btn btn-primary" style="background: #059669; color:#fff"><i class="fa-solid fa-right-to-bracket"></i> Log in to Request</a>
                                 </div>
                             <?php elseif ($_SESSION['user_id'] === $donation['donor_id']): ?>
                                 <div class="alert alert-warning">

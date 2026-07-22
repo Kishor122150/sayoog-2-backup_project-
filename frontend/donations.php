@@ -4,7 +4,14 @@ require_once '../config.php';
 // Auto-expire past donations
 $pdo->exec("UPDATE donations SET status = 'cancelled' WHERE status IN ('available', 'requested', 'accepted') AND expiry_time < NOW()");
 
-$donations = get_available_donations($pdo);
+// Paginated donations listing
+list($page, $perPage) = get_pagination_state();
+$donationsResult = paginate($pdo,
+    "SELECT d.*, u.name AS donor_name FROM donations d JOIN users u ON d.donor_id = u.id WHERE d.verification_status = 'approved' AND d.status = 'available'",
+    "SELECT COUNT(*) FROM donations d WHERE d.verification_status = 'approved' AND d.status = 'available'",
+    [], $page, $perPage, 'd.created_at DESC'
+);
+$donations = $donationsResult['data'];
 ?>
 <?php
 $page_title = 'Food Listings | Sayog';
@@ -118,7 +125,7 @@ require_once '../header.php';
                                 </div>
                                 <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
                                     <a href="donation.php?id=<?php echo $d['id']; ?>" class="btn btn-primary">View Details</a>
-                                    <a href="login.php?redirect=donation.php?id=<?php echo $d['id']; ?>" class="btn btn-outline">Request Pickup</a>
+                                    <a href="/frontend/login.php?redirect=donation.php?id=<?php echo $d['id']; ?>" class="btn btn-outline">Request Pickup</a>
                                     <?php if (!empty($d['phone'])): ?>
                                         <?php
                                         $wa_msg = 'Hello ' . $d['donor_name'] . ', I am interested in your food donation: ' . $d['food_item'] . ' on Sayog.';
@@ -129,6 +136,9 @@ require_once '../header.php';
                             </div>
                         </article>
                     <?php endforeach; ?>
+                </div>
+                <div class="pagination-frontend">
+                    <?php echo render_pagination($donationsResult, '/frontend/donations.php'); ?>
                 </div>
             <?php endif; ?>
         </section>

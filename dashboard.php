@@ -34,6 +34,19 @@ if (!in_array($page, $valid_pages)) {
     $page = 'home';
 }
 
+// Ensure NGO session vars exist for existing users (backward compat)
+if (!isset($_SESSION['account_type'])) {
+    $uStmt = $pdo->prepare("SELECT account_type, org_verified, org_name, display_as_org FROM users WHERE id = ?");
+    $uStmt->execute([$user_id]);
+    $uData = $uStmt->fetch();
+    if ($uData) {
+        $_SESSION['account_type'] = $uData['account_type'];
+        $_SESSION['org_verified'] = (int)$uData['org_verified'];
+        $_SESSION['org_name'] = $uData['org_name'];
+        $_SESSION['display_as_org'] = (int)$uData['display_as_org'];
+    }
+}
+
 $unread_notification_count = get_unread_notifications_count($pdo, $user_id);
 
 // -------------------------------------------------------------
@@ -53,6 +66,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     // Action: Create Donation (Any logged-in user can donate)
     if ($action === 'create_donation') {
+        // Block unverified NGOs from posting donations
+        $acctType = $_SESSION['account_type'] ?? 'personal';
+        $orgVerified = $_SESSION['org_verified'] ?? 0;
+        if ($acctType === 'ngo' && $orgVerified != 1) {
+            $errors[] = "Your NGO account is pending verification. You cannot post donations until an admin approves your organization. Please wait for verification.";
+        }
+        
         $food_item = sanitize($_POST['food_item'] ?? '');
         $quantity = sanitize($_POST['quantity'] ?? '');
         $expiry_time = sanitize($_POST['expiry_time'] ?? '');
@@ -628,6 +648,9 @@ try {
                 $rec_name = $stmt_r->fetchColumn() ?: 'Community';
                 generate_donation_certificate($pdo, $donation_id, $donor_name, $food_name, $rec_name);
 
+                // Auto-award trust badges (trusted_donor after 5 completes, community_champion, etc.)
+                auto_award_trust_badges($pdo, $user_id);
+
                 set_flash_message('success', 'Donation successfully marked as Completed! Please rate the receiver below.');
                 redirect('dashboard.php?page=track-donation&rate_donation=' . $donation_id);
             }
@@ -720,7 +743,18 @@ try {
                     $dStmt->execute([$donation_id]);
                     $food = $dStmt->fetchColumn();
 
+                    // Create the volunteer delivery (existing flow)
                     create_volunteer_delivery($pdo, $donation_id, $request_id, $r['consumer_id'], $r['donor_id']);
+
+                    // Enhanced: Log delivery_created event via new state machine bridge
+                    $delStmt = $pdo->prepare("SELECT id FROM volunteer_deliveries WHERE donation_id = ? AND request_id = ? ORDER BY id DESC LIMIT 1");
+                    $delStmt->execute([$donation_id, $request_id]);
+                    $newDeliveryId = $delStmt->fetchColumn();
+                    if ($newDeliveryId) {
+                        try_log_delivery_event((int)$newDeliveryId, 'none', 'assigned', 'consumer', $user_id, 'Delivery requested by consumer');
+                        // Try auto-assignment via the new VolunteerMatchingService
+                        try_auto_assign_volunteer((int)$newDeliveryId);
+                    }
 
                     create_notification($pdo, $r['donor_id'], 'delivery_needed',
                         'The consumer has requested a volunteer for "' . $food . '". It will appear in the volunteer hub.',
@@ -746,7 +780,31 @@ try {
             $errors[] = 'Invalid delivery request.';
         }
         if (empty($errors)) {
-            if (accept_volunteer_delivery($pdo, $delivery_id, $user_id)) {
+            // Try new state machine first; fall back to old function
+            $smTransitioned = false;
+            if (class_exists('App\\Services\\DeliveryStateMachine')) {
+                try {
+                    $sm = new \App\Services\DeliveryStateMachine($pdo);
+                    $result = $sm->transition(
+                        $delivery_id, 'accepted', 'volunteer', $user_id,
+                        null, null, 'Volunteer accepted delivery from hub'
+                    );
+                    $smTransitioned = $result['success'];
+                } catch (\Throwable $e) {
+                    // State machine unavailable — fall back
+                }
+            }
+            
+            if (!$smTransitioned) {
+                // Fall back to old reliable function
+                $smTransitioned = accept_volunteer_delivery($pdo, $delivery_id, $user_id);
+                // Log event for the old-function path (state machine already handles it on success)
+                if ($smTransitioned) {
+                    try_log_delivery_event($delivery_id, 'assigned', 'accepted', 'volunteer', $user_id, 'Volunteer accepted delivery (fallback path)');
+                }
+            }
+            
+            if ($smTransitioned) {
                 set_flash_message('success', 'Delivery accepted! You can now contact the donor and consumer.');
                 redirect('dashboard.php?page=volunteer');
             } else {
@@ -765,8 +823,43 @@ try {
             $errors[] = 'Invalid delivery status update.';
         }
         if (empty($errors)) {
-            if (update_delivery_status($pdo, $delivery_id, $user_id, $new_status, $notes)) {
+            // Try new state machine first; fall back to old function
+            $smTransitioned = false;
+            if (class_exists('App\\Services\\DeliveryStateMachine')) {
+                try {
+                    $sm = new \App\Services\DeliveryStateMachine($pdo);
+                    $result = $sm->transition(
+                        $delivery_id, $new_status, 'volunteer', $user_id,
+                        null, null, $notes ?: "Volunteer marked as {$new_status}"
+                    );
+                    $smTransitioned = $result['success'];
+                } catch (\Throwable $e) {
+                    // State machine unavailable — fall back
+                }
+            }
+            
+            if (!$smTransitioned) {
+                // Fall back to old reliable function
+                $oldStatus = '';
+                $stStmt = $pdo->prepare("SELECT status FROM volunteer_deliveries WHERE id = ?");
+                $stStmt->execute([$delivery_id]);
+                $oldStatus = $stStmt->fetchColumn() ?: 'unknown';
+                
+                $smTransitioned = update_delivery_status($pdo, $delivery_id, $user_id, $new_status, $notes);
+                // Log event for the old-function path
+                if ($smTransitioned) {
+                    try_log_delivery_event($delivery_id, $oldStatus, $new_status, 'volunteer', $user_id, $notes ?: "Volunteer marked as {$new_status} (fallback)");
+                }
+            }
+            
+            if ($smTransitioned) {
                 $status_labels = ['picked_up' => 'Marked as Picked Up', 'in_transit' => 'Marked as In Transit', 'delivered' => 'Marked as Delivered'];
+                
+                // Auto-award trust badges when delivery is completed
+                if ($new_status === 'delivered') {
+                    auto_award_trust_badges($pdo, $user_id);
+                }
+                
                 set_flash_message('success', 'Delivery ' . ($status_labels[$new_status] ?? 'updated') . '!');
                 redirect('dashboard.php?page=volunteer');
             } else {
@@ -783,7 +876,31 @@ try {
             $errors[] = 'Invalid delivery request.';
         }
         if (empty($errors)) {
-            if (reject_volunteer_delivery($pdo, $delivery_id, $user_id, $reason)) {
+            // Try new state machine first; fall back to old function
+            $smTransitioned = false;
+            if (class_exists('App\\Services\\DeliveryStateMachine')) {
+                try {
+                    $sm = new \App\Services\DeliveryStateMachine($pdo);
+                    $result = $sm->transition(
+                        $delivery_id, 'cancelled', 'volunteer', $user_id,
+                        null, null, $reason ?: 'Volunteer declined delivery'
+                    );
+                    $smTransitioned = $result['success'];
+                } catch (\Throwable $e) {
+                    // State machine unavailable — fall back
+                }
+            }
+            
+            if (!$smTransitioned) {
+                // Fall back to old function
+                $smTransitioned = reject_volunteer_delivery($pdo, $delivery_id, $user_id, $reason);
+                // Log event for the old-function path
+                if ($smTransitioned) {
+                    try_log_delivery_event($delivery_id, 'assigned', 'cancelled', 'volunteer', $user_id, $reason ?: 'Volunteer declined delivery (fallback)');
+                }
+            }
+            
+            if ($smTransitioned) {
                 set_flash_message('info', 'Delivery declined. The system will try to find another volunteer.');
                 redirect('dashboard.php?page=volunteer');
             } else {
@@ -897,6 +1014,96 @@ try {
             }
         }
     }
+
+    // Action: Submit NGO Upgrade (Personal user upgrades to NGO account)
+    if ($action === 'submit_ngo_upgrade') {
+        $acctType = $_SESSION['account_type'] ?? 'personal';
+        if ($acctType === 'ngo') {
+            $errors[] = "You are already registered as an NGO.";
+        }
+        
+        if (empty($errors)) {
+            $org_name = sanitize($_POST['org_name'] ?? '');
+            $org_type = sanitize($_POST['org_type'] ?? 'ngo');
+            $org_district = sanitize($_POST['org_district'] ?? '');
+            $org_ward = sanitize($_POST['org_ward'] ?? '');
+            $org_registration = sanitize($_POST['org_registration'] ?? '');
+            $org_certificate_path = null;
+
+            if (empty($org_name)) $errors[] = "Organization name is required.";
+            if (empty($org_district)) $errors[] = "District is required.";
+
+            // Handle certificate upload
+            if (!empty($_FILES['org_certificate']['name'])) {
+                $certFile = $_FILES['org_certificate'];
+                if ($certFile['error'] !== UPLOAD_ERR_OK) {
+                    $errors[] = "Failed to upload certificate.";
+                } else {
+                    $finfo = new finfo(FILEINFO_MIME_TYPE);
+                    $certMime = $finfo->file($certFile['tmp_name']);
+                    $allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'application/pdf'];
+                    if (!in_array($certMime, $allowedTypes, true)) {
+                        $errors[] = "Invalid certificate file. Allowed: JPG, PNG, GIF, PDF.";
+                    } elseif ($certFile['size'] > 5 * 1024 * 1024) {
+                        $errors[] = "Certificate file must be 5MB or less.";
+                    } else {
+                        $ext = pathinfo($certFile['name'], PATHINFO_EXTENSION);
+                        $filename = 'ngo_cert_' . uniqid() . '_' . $user_id . '.' . strtolower($ext);
+                        $dest = UPLOADS_DIR . '/volunteer_docs/' . $filename;
+                        if (move_uploaded_file($certFile['tmp_name'], $dest)) {
+                            $org_certificate_path = 'uploads/volunteer_docs/' . $filename;
+                        } else {
+                            $errors[] = "Could not save certificate file.";
+                        }
+                    }
+                }
+            }
+
+            if (empty($errors)) {
+                try {
+                    $stmt = $pdo->prepare("
+                        UPDATE users SET 
+                            account_type = 'ngo',
+                            org_name = ?,
+                            org_type = ?,
+                            org_district = ?,
+                            org_ward = ?,
+                            org_registration = ?,
+                            org_certificate = ?,
+                            org_verified = 0,
+                            display_as_org = 1
+                        WHERE id = ?
+                    ");
+                    $stmt->execute([$org_name, $org_type, $org_district, $org_ward ?: null, $org_registration ?: null, $org_certificate_path, $user_id]);
+
+                    // Update session vars immediately
+                    $_SESSION['account_type'] = 'ngo';
+                    $_SESSION['org_verified'] = 0;
+                    $_SESSION['org_name'] = $org_name;
+                    $_SESSION['display_as_org'] = 1;
+
+                    // Notify admins about pending NGO verification
+                    $adminStmt = $pdo->query("SELECT id FROM users WHERE role = 'admin' LIMIT 5");
+                    $admins = $adminStmt->fetchAll(PDO::FETCH_COLUMN);
+                    foreach ($admins as $adminId) {
+                        create_notification($pdo, (int)$adminId, 'ngo_verification_needed',
+                            'Existing user upgraded to NGO: "' . $org_name . '" (User: ' . $user_name . '). Please review in admin panel.',
+                            'admin/admin.php?section=ngo-verification', false);
+                    }
+
+                    // Notify the user
+                    create_notification($pdo, $user_id, 'ngo_upgrade',
+                        'Your account has been upgraded to NGO: "' . $org_name . '". Your details have been submitted for admin verification.',
+                        'dashboard.php?page=profile', true);
+
+                    set_flash_message('success', 'Your account has been upgraded to NGO status! Your organization details have been submitted for admin verification.');
+                    redirect('dashboard.php?page=profile');
+                } catch (PDOException $e) {
+                    $errors[] = "Failed to upgrade account: " . $e->getMessage();
+                }
+            }
+        }
+    }
 }
 
 $flash = get_flash_message();
@@ -948,6 +1155,46 @@ $flash = get_flash_message();
                         <div class="user-rating-stars" style="margin-top:2px;">
                             <?php echo render_stars($sidebar_rating['average'], 10); ?>
                             <span style="font-size:10px;font-weight:600;color:var(--text-muted);"><?php echo number_format($sidebar_rating['average'],1); ?> (<?php echo $sidebar_rating['total_ratings']; ?>)</span>
+                        </div>
+                    <?php endif; ?>
+                    
+                    <!-- Sidebar Badges -->
+                    <?php
+                    $sidebarAcctType = $_SESSION['account_type'] ?? 'personal';
+                    $sidebarOrgVerified = $_SESSION['org_verified'] ?? 0;
+                    $sidebarOrgName = $_SESSION['org_name'] ?? '';
+                    
+                    // Show NGO verified badge
+                    if ($sidebarAcctType === 'ngo' && $sidebarOrgVerified == 1): ?>
+                        <div style="margin-top:6px;display:flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:600;background:rgba(5,150,105,0.1);color:#059669;">
+                            <i class="fa-solid fa-circle-check" style="font-size:10px;"></i>
+                            <span><?php echo htmlspecialchars($sidebarOrgName); ?></span>
+                            <span style="opacity:0.7;">Verified NGO</span>
+                        </div>
+                    <?php elseif ($sidebarAcctType === 'ngo' && $sidebarOrgVerified == 0): ?>
+                        <div style="margin-top:6px;display:flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:600;background:rgba(245,158,11,0.1);color:#d97706;">
+                            <i class="fa-solid fa-clock" style="font-size:10px;"></i>
+                            <span>NGO Verification Pending</span>
+                        </div>
+                    <?php endif; ?>
+                    
+                    <?php
+                    // Show trust badges (up to 2)
+                    $badgeStmt = $pdo->prepare("SELECT badge_type, badge_label, badge_icon, badge_color FROM user_badges WHERE user_id = ? AND badge_type IN ('trusted_donor','top_volunteer','community_champion','early_adopter') ORDER BY awarded_at DESC LIMIT 2");
+                    $badgeStmt->execute([$user_id]);
+                    $sidebarBadges = $badgeStmt->fetchAll();
+                    if (!empty($sidebarBadges)): ?>
+                        <div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:3px;">
+                            <?php foreach ($sidebarBadges as $sb): 
+                                $sbColor = htmlspecialchars($sb['badge_color'] ?? '#059669');
+                                $sbLabel = htmlspecialchars($sb['badge_label']);
+                                $sbIcon = htmlspecialchars($sb['badge_icon'] ?? 'fa-star');
+                            ?>
+                                <span style="display:inline-flex;align-items:center;gap:2px;padding:1px 6px;border-radius:999px;font-size:9px;font-weight:600;background:<?php echo $sbColor; ?>15;color:<?php echo $sbColor; ?>;">
+                                    <i class="fa-solid <?php echo $sbIcon; ?>" style="font-size:8px;"></i>
+                                    <?php echo $sbLabel; ?>
+                                </span>
+                            <?php endforeach; ?>
                         </div>
                     <?php endif; ?>
                 </div>
@@ -1110,6 +1357,40 @@ $flash = get_flash_message();
             <!-- Main Work Area Content -->
             <div class="app-content">
                 
+                <!-- NGO Verification Status Banner -->
+                <?php 
+                $acctType = $_SESSION['account_type'] ?? 'personal';
+                $orgVerified = $_SESSION['org_verified'] ?? 0;
+                if ($acctType === 'ngo' && $orgVerified == 0): ?>
+                    <div class="alert alert-warning" style="background: #fffbeb; border: 1.5px solid #f59e0b; border-radius: 14px; padding: 16px 20px; margin-bottom: 20px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap;">
+                        <div style="width: 44px; height: 44px; background: rgba(245, 158, 11, 0.12); border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 20px;">
+                            <i class="fa-solid fa-building-columns" style="color: #f59e0b;"></i>
+                        </div>
+                        <div style="flex: 1; min-width: 200px;">
+                            <div style="font-weight: 700; font-size: 14px; color: #92400e;">⏳ NGO Verification Pending</div>
+                            <div style="font-size: 13px; color: #b45309; margin-top: 2px;">
+                                Your organization <strong><?php echo htmlspecialchars($_SESSION['org_name'] ?? ''); ?></strong> is awaiting admin verification. 
+                                You can browse the platform, but cannot post donations until verified. 
+                                <a href="dashboard.php?page=profile" style="color: #059669; font-weight: 600; text-decoration: underline;">View Profile</a>
+                            </div>
+                        </div>
+                    </div>
+                <?php elseif ($acctType === 'ngo' && $orgVerified == 1): ?>
+                    <div class="alert alert-success" style="background: #f0fdf4; border: 1.5px solid #6ee7b7; border-radius: 14px; padding: 12px 18px; margin-bottom: 20px; display: flex; align-items: center; gap: 10px;">
+                        <i class="fa-solid fa-circle-check" style="color: #059669; font-size: 18px;"></i>
+                        <span style="font-size: 13px; color: #065f46;">
+                            <strong>✓ Verified NGO</strong> — Your organization is verified. Your donations will display the verified NGO badge.
+                        </span>
+                    </div>
+                <?php elseif ($acctType === 'ngo' && $orgVerified == -1): ?>
+                    <div class="alert alert-danger" style="background: #fef2f2; border: 1.5px solid #fca5a5; border-radius: 14px; padding: 12px 18px; margin-bottom: 20px; display: flex; align-items: center; gap: 10px;">
+                        <i class="fa-solid fa-circle-xmark" style="color: #ef4444; font-size: 18px;"></i>
+                        <span style="font-size: 13px; color: #991b1b;">
+                            <strong>✗ Verification Rejected</strong> — Your organization verification was not approved. Please contact admin or update your details.
+                        </span>
+                    </div>
+                <?php endif; ?>
+
                 <!-- Display Notification Flash Messages -->
                 <?php if ($flash): ?>
                     <div class="alert alert-<?php echo $flash['type']; ?>">
@@ -1237,7 +1518,7 @@ $flash = get_flash_message();
                                 <div class="rec-card-body">
                                     <h3 title="<?php echo htmlspecialchars($d['food_item']); ?>"><?php echo htmlspecialchars($d['food_item']); ?></h3>
                                     <div class="rec-card-donor">
-                                        <i class="fa-solid fa-user"></i> <?php echo htmlspecialchars($d['donor_name']); ?>
+                                        <?php echo render_user_with_badge($pdo, $d['donor_id'] ?? 0); ?>
                                     </div>
                                     <div class="rec-card-meta">
                                         <span><i class="fa-solid fa-boxes-stacked"></i> <?php echo htmlspecialchars($d['quantity']); ?></span>
@@ -1535,9 +1816,18 @@ $flash = get_flash_message();
                 // TAB: CREATE DONATION
                 // =============================================================
                 } elseif ($page === 'create-donation') {
-                    $myDonationStmt = $pdo->prepare("SELECT * FROM donations WHERE donor_id = ? ORDER BY created_at DESC");
-                    $myDonationStmt->execute([$user_id]);
-                    $myDonations = $myDonationStmt->fetchAll();
+                    // Paginated donation listing
+                    $donPage = max(1, intval($_GET['pgn'] ?? 1));
+                    $donPerPage = max(1, min(100, intval($_GET['per_page'] ?? 10)));
+                    $donResult = paginate(
+                        $pdo,
+                        "SELECT * FROM donations WHERE donor_id = ?",
+                        "SELECT COUNT(*) FROM donations WHERE donor_id = ?",
+                        [$user_id],
+                        $donPage, $donPerPage,
+                        'created_at DESC'
+                    );
+                    $myDonations = $donResult['data'];
                     ?>
                     <div style="max-width: 920px; margin: 0 auto 24px;">
                         <div style="display:flex; flex-wrap:wrap; justify-content:space-between; gap:16px; align-items:center; margin-bottom:24px;">
@@ -1627,6 +1917,7 @@ $flash = get_flash_message();
                                         </div>
                                     <?php endforeach; ?>
                                 </div>
+                                <?php echo render_pagination($donResult, '/dashboard.php?page=create-donation'); ?>
                             <?php endif; ?>
                         </div>
                     </div>
@@ -2011,6 +2302,50 @@ $flash = get_flash_message();
                     $availableDeliveries = get_available_deliveries_for_volunteer($pdo, $user_id);
                     $activeDeliveries = get_volunteer_active_deliveries($pdo, $user_id);
                     $deliveryHistory = get_volunteer_delivery_history($pdo, $user_id, 10);
+                    
+                    // Enhanced: Add match scores to available deliveries (sorted by best match)
+                    if (!empty($availableDeliveries) && class_exists('App\\Services\\VolunteerMatchingService')) {
+                        try {
+                            $matcher = new \App\Services\VolunteerMatchingService($pdo);
+                            foreach ($availableDeliveries as $idx => $del) {
+                                $candidates = $matcher->scoreAllCandidates((int)$del['id']);
+                                $myScore = null;
+                                foreach ($candidates as $c) {
+                                    if ((int)$c['volunteer']['user_id'] === $user_id) {
+                                        $myScore = $c;
+                                        break;
+                                    }
+                                }
+                                if ($myScore) {
+                                    $availableDeliveries[$idx]['_match_score'] = $myScore['total_score'];
+                                    $availableDeliveries[$idx]['_score_details'] = $myScore['scores'];
+                                }
+                            }
+                            // Sort by match score descending (best matches first)
+                            usort($availableDeliveries, fn($a, $b) => ($b['_match_score'] ?? 0) <=> ($a['_match_score'] ?? 0));
+                        } catch (\Throwable $e) {
+                            // Matching service unavailable — show unsorted
+                        }
+                    }
+                    
+                    // Enhanced: Add event history to active deliveries
+                    if (!empty($activeDeliveries)) {
+                        try {
+                            foreach ($activeDeliveries as $idx => $del) {
+                                $evtStmt = $pdo->prepare(
+                                    "SELECT de.*, vu.name AS actor_name 
+                                     FROM delivery_events de 
+                                     LEFT JOIN users vu ON de.actor_id = vu.id 
+                                     WHERE de.delivery_id = ? 
+                                     ORDER BY de.created_at ASC LIMIT 20"
+                                );
+                                $evtStmt->execute([(int)$del['id']]);
+                                $activeDeliveries[$idx]['_events'] = $evtStmt->fetchAll();
+                            }
+                        } catch (\Throwable $e) {
+                            // Events table may not exist yet
+                        }
+                    }
                     $vol = get_volunteer_details($pdo, $user_id);
                     if (!$vol || $vol['status'] !== 'approved'):
                         echo '<div class="alert alert-warning"><i class="fa-solid fa-shield-halved"></i> Access denied. Your volunteer status is not approved.</div>';
@@ -2196,7 +2531,18 @@ $flash = get_flash_message();
                     <?php endif;
 
                 } elseif ($page === 'notifications') {
-                    $notifications = get_user_notifications($pdo, $user_id);
+                    // Paginated notifications
+                    $notifPage = max(1, intval($_GET['pgn'] ?? 1));
+                    $notifPerPage = max(1, min(100, intval($_GET['per_page'] ?? 20)));
+                    $notifResult = paginate(
+                        $pdo,
+                        "SELECT * FROM notifications WHERE user_id = ?",
+                        "SELECT COUNT(*) FROM notifications WHERE user_id = ?",
+                        [$user_id],
+                        $notifPage, $notifPerPage,
+                        'created_at DESC'
+                    );
+                    $notifications = $notifResult['data'];
                     ?>
                     <div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 18px;">
                         <p style="color: var(--text-secondary); font-size: 14.5px; margin: 0;">Your latest activity updates are shown here. You can also email notifications if configured.</p>
@@ -2233,6 +2579,7 @@ $flash = get_flash_message();
                                     <?php endif; ?>
                                 </div>
                             <?php endforeach; ?>
+                            <?php echo render_pagination($notifResult, '/dashboard.php?page=notifications'); ?>
                         </div>
                     <?php endif; ?>
 
@@ -2357,16 +2704,24 @@ $flash = get_flash_message();
                 // =============================================================
                 } elseif ($page === 'manage-request') {
                     // Fetch requests made by current user
-                    $c_reqs_stmt = $pdo->prepare("
-                        SELECT r.*, d.food_item, d.pickup_address, d.phone AS donor_phone, d.status AS donation_status, u.name AS donor_name
-                        FROM requests r
-                        JOIN donations d ON r.donation_id = d.id
-                        JOIN users u ON d.donor_id = u.id
-                        WHERE r.consumer_id = ?
-                        ORDER BY r.created_at DESC
-                    ");
-                    $c_reqs_stmt->execute([$user_id]);
-                    $my_requests = $c_reqs_stmt->fetchAll();
+                    // Paginated requests listing
+                    $reqPage = max(1, intval($_GET['pgn'] ?? 1));
+                    $reqPerPage = max(1, min(100, intval($_GET['per_page'] ?? 10)));
+                    $reqResult = paginate(
+                        $pdo,
+                        "SELECT r.*, d.food_item, d.pickup_address, d.phone AS donor_phone, d.status AS donation_status, u.name AS donor_name
+                         FROM requests r
+                         JOIN donations d ON r.donation_id = d.id
+                         JOIN users u ON d.donor_id = u.id
+                         WHERE r.consumer_id = ?",
+                        "SELECT COUNT(*) FROM requests r
+                         JOIN donations d ON r.donation_id = d.id
+                         WHERE r.consumer_id = ?",
+                        [$user_id],
+                        $reqPage, $reqPerPage,
+                        'r.created_at DESC'
+                    );
+                    $my_requests = $reqResult['data'];
                     ?>
                     <p style="color: var(--text-secondary); font-size: 14.5px; margin-bottom: 20px;">View the status of requests you have made. You can cancel pending requests at any time.</p>
                     
@@ -2447,6 +2802,7 @@ $flash = get_flash_message();
                                     <?php endforeach; ?>
                                 </tbody>
                             </table>
+                            <?php echo render_pagination($reqResult, '/dashboard.php?page=manage-request'); ?>
                         </div>
                     <?php endif; ?>
 
@@ -2757,17 +3113,24 @@ $flash = get_flash_message();
                 // TAB: TRACK REQUEST (Track user requests visually)
                 // =============================================================
                 } elseif ($page === 'track-request') {
-                    // Fetch requests made by this user
-                    $c_track_stmt = $pdo->prepare("
-                        SELECT r.*, d.food_item, d.pickup_address, d.status AS donation_status, u.name AS donor_name, u.phone AS donor_phone
-                        FROM requests r 
-                        JOIN donations d ON r.donation_id = d.id 
-                        JOIN users u ON d.donor_id = u.id
-                        WHERE r.consumer_id = ?
-                        ORDER BY r.created_at DESC
-                    ");
-                    $c_track_stmt->execute([$user_id]);
-                    $my_requests = $c_track_stmt->fetchAll();
+                    // Paginated requests for timeline view
+                    $trkPage = max(1, intval($_GET['pgn'] ?? 1));
+                    $trkPerPage = max(1, min(100, intval($_GET['per_page'] ?? 10)));
+                    $trkResult = paginate(
+                        $pdo,
+                        "SELECT r.*, d.food_item, d.pickup_address, d.status AS donation_status, u.name AS donor_name, u.phone AS donor_phone
+                         FROM requests r 
+                         JOIN donations d ON r.donation_id = d.id 
+                         JOIN users u ON d.donor_id = u.id
+                         WHERE r.consumer_id = ?",
+                        "SELECT COUNT(*) FROM requests r
+                         JOIN donations d ON r.donation_id = d.id
+                         WHERE r.consumer_id = ?",
+                        [$user_id],
+                        $trkPage, $trkPerPage,
+                        'r.created_at DESC'
+                    );
+                    $my_requests = $trkResult['data'];
                     ?>
                     <p style="color: var(--text-secondary); font-size: 14.5px; margin-bottom: 20px;">Track the approval and fulfillment status of food donation requests you have sent.</p>
                     
@@ -3137,6 +3500,7 @@ $flash = get_flash_message();
                                 <?php endif; ?>
                             </div>
                         <?php endforeach; ?>
+                        <?php echo render_pagination($trkResult, '/dashboard.php?page=track-request'); ?>
                     <?php endif; ?>
 
                 <?php
@@ -3193,6 +3557,94 @@ $flash = get_flash_message();
                                 <?php endif; ?>
                             </div>
                         </div>
+
+                        <!-- My Badges Section -->
+                        <?php 
+                        $userBadges = get_user_badges($pdo, $user_id);
+                        if (!empty($userBadges)): 
+                        ?>
+                        <div class="profile-card-right" style="margin-bottom: 20px;">
+                            <h3 style="font-size: 16px; font-weight: 750; color: var(--text-primary); margin-bottom: 16px; border-bottom: 1.5px solid var(--border); padding-bottom: 10px;">
+                                <i class="fa-solid fa-shield-halved" style="color: #059669;"></i> My Badges & Achievements
+                            </h3>
+                            <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+                                <?php foreach ($userBadges as $badge): 
+                                    $bColor = htmlspecialchars($badge['badge_color'] ?? '#059669');
+                                    $bLabel = htmlspecialchars($badge['badge_label']);
+                                    $bIcon = htmlspecialchars($badge['badge_icon'] ?? 'fa-star');
+                                    $bDate = date('d M Y', strtotime($badge['awarded_at']));
+                                ?>
+                                <div style="display: flex; align-items: center; gap: 8px; padding: 8px 14px; background: <?php echo $bColor; ?>10; border: 1px solid <?php echo $bColor; ?>30; border-radius: 999px; font-size: 12px; font-weight: 600; color: <?php echo $bColor; ?>;">
+                                    <i class="fa-solid <?php echo $bIcon; ?>"></i>
+                                    <span><?php echo $bLabel; ?></span>
+                                    <span style="font-size: 10px; opacity: 0.7;">• <?php echo $bDate; ?></span>
+                                </div>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+                        <?php endif; ?>
+
+                        <!-- NGO Upgrade Section — for Personal/Other users who want to register as NGO -->
+                        <?php 
+                        $currentAcctType = $_SESSION['account_type'] ?? 'personal';
+                        if ($currentAcctType !== 'ngo'): 
+                        ?>
+                        <div class="profile-card-right" style="margin-bottom: 20px; border: 2px dashed #05966940; background: linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%);">
+                            <h3 style="font-size: 16px; font-weight: 750; color: #065f46; margin-bottom: 4px;">
+                                <i class="fa-solid fa-building-columns" style="color: #059669;"></i> Upgrade to NGO Account
+                            </h3>
+                            <p style="font-size: 13px; color: #6b7280; margin: 4px 0 16px;">
+                                Represent an organization? Fill in your NGO details below and submit for admin verification. 
+                                Once verified, your donations will display a verified NGO badge.
+                            </p>
+                            <form action="dashboard.php?page=profile" method="POST" enctype="multipart/form-data" novalidate>
+                                <input type="hidden" name="action" value="submit_ngo_upgrade">
+                                
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                                    <div class="form-group">
+                                        <label for="org_name" class="form-label">Organization Name <span style="color:#ef4444;">*</span></label>
+                                        <input type="text" id="org_name" name="org_name" class="form-control" placeholder="E.g., Hamro Sahayog Foundation" required>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="org_type" class="form-label">Organization Type</label>
+                                        <select id="org_type" name="org_type" class="form-control">
+                                            <option value="ngo">NGO (Non-Governmental Organization)</option>
+                                            <option value="community_group">Community Group</option>
+                                            <option value="school">School / College</option>
+                                            <option value="trust">Trust / Foundation</option>
+                                            <option value="business">Business / CSR</option>
+                                            <option value="other">Other</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="org_district" class="form-label">District <span style="color:#ef4444;">*</span></label>
+                                        <input type="text" id="org_district" name="org_district" class="form-control" placeholder="E.g., Kathmandu" required>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="org_ward" class="form-label">Ward / Municipality</label>
+                                        <input type="text" id="org_ward" name="org_ward" class="form-control" placeholder="E.g., Ward 5">
+                                    </div>
+                                    <div class="form-group" style="grid-column: 1 / -1;">
+                                        <label for="org_registration" class="form-label">Registration Number <span style="font-size:11px;color:#9ca3af;">(optional but recommended)</span></label>
+                                        <input type="text" id="org_registration" name="org_registration" class="form-control" placeholder="E.g., SWC-12345">
+                                    </div>
+                                    <div class="form-group" style="grid-column: 1 / -1;">
+                                        <label for="org_certificate" class="form-label">Registration Certificate <span style="font-size:11px;color:#9ca3af;">(JPG, PNG, or PDF, max 5MB — optional)</span></label>
+                                        <input type="file" id="org_certificate" name="org_certificate" class="form-control" accept=".jpg,.jpeg,.png,.gif,.pdf">
+                                    </div>
+                                </div>
+
+                                <div style="margin-top: 12px; padding: 10px 14px; background: rgba(5, 150, 105, 0.06); border-radius: 8px; font-size: 12px; color: #6b7280; display: flex; align-items: center; gap: 8px;">
+                                    <i class="fa-solid fa-circle-info" style="color: #059669;"></i>
+                                    <span>Your details will be reviewed by an admin. You'll be notified once verified. Registration details are only visible to you and admin.</span>
+                                </div>
+
+                                <button type="submit" class="btn btn-primary" style="margin-top: 14px;">
+                                    <i class="fa-solid fa-paper-plane"></i> Submit for Verification
+                                </button>
+                            </form>
+                        </div>
+                        <?php endif; ?>
 
                         <!-- Right Edit Panel -->
                         <div class="profile-card-right">

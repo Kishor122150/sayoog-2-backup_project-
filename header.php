@@ -136,8 +136,8 @@ if (!isset($active_page)) $active_page = 'home';
             <a href="/frontend/team.php"<?php echo $active_page === 'team' ? ' class="active" style="color: #059669;"' : ''; ?> data-i18n="nav.our_team">Our Team</a>
             <a href="/frontend/about.php"<?php echo $active_page === 'about' ? ' class="active" style="color: #059669;"' : ''; ?> data-i18n="nav.about">About</a>
             <a href="/frontend/contact.php"<?php echo $active_page === 'contact' ? ' class="active" style="color: #059669;"' : ''; ?> data-i18n="nav.contact">Contact</a>
-            <a href="login.php" data-i18n="nav.login">Login</a>
-            <a href="register.php" style="background: #059669; color:#fff" data-i18n="nav.get_started">Get Started</a>
+            <a href="/frontend/login.php" data-i18n="nav.login">Login</a>
+            <a href="/frontend/register.php" style="background: #059669; color:#fff" data-i18n="nav.get_started">Get Started</a>
             <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme" style="margin-left:4px;">
                 <i class="fa-solid fa-moon"></i>
             </button>

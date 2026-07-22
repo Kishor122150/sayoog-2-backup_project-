@@ -73,9 +73,22 @@ function render_available_deliveries($pdo, $deliveries) {
                         <span><i class="fa-solid fa-clock" style="width:18px;color:#059669;"></i> Consume before: <?php echo date('M d, Y h:i A', strtotime($del['expiry_time'])); ?></span>
                         <?php if (!empty($del['request_message'])): ?>
                         <span><i class="fa-solid fa-comment" style="width:18px;color:#059669;"></i> Request: <?php echo htmlspecialchars($del['request_message']); ?></span>
-                        <?php endif; ?>
-                        <?php if (!empty($del['_proximity_score'])): ?>
+                        <?php endif; ?>                            <?php if (!empty($del['_proximity_score'])): ?>
                         <span style="color:#059669;font-weight:600;"><i class="fa-solid fa-location-crosshairs"></i> Near your area</span>
+                        <?php endif; ?>                                <?php if (!empty($del['_score_details'])): ?>
+                                <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:2px;">
+                                    <?php $detailColors = ['proximity'=>'#059669','rating'=>'#3b82f6','vehicle'=>'#8b5cf6','completion'=>'#f59e0b','load'=>'#06b6d4']; ?>
+                                    <?php foreach ($del['_score_details'] as $key => $val): ?>
+                                        <span style="font-size:10px;padding:1px 6px;border-radius:4px;background:<?php echo ($detailColors[$key] ?? '#6b7280'); ?>15;color:<?php echo $detailColors[$key] ?? '#6b7280'; ?>;font-weight:600;">
+                                            <?php echo ucfirst($key); ?>: <?php echo $val; ?>
+                                        </span>
+                                    <?php endforeach; ?>
+                                </div>
+                                <?php endif; ?>
+                                <?php if (!empty($del['_match_score'])): ?>
+                        <span style="display:inline-flex;align-items:center;gap:4px;padding:2px 10px;border-radius:999px;font-size:11px;font-weight:700;background:<?php echo $del['_match_score'] >= 60 ? 'rgba(5,150,105,0.12)' : ($del['_match_score'] >= 40 ? 'rgba(245,158,11,0.12)' : 'rgba(239,68,68,0.08)'); ?>;color:<?php echo $del['_match_score'] >= 60 ? '#059669' : ($del['_match_score'] >= 40 ? '#d97706' : '#dc2626'); ?>;">
+                                <i class="fa-solid fa-star"></i> Match: <?php echo $del['_match_score']; ?>/100
+                            </span>
                         <?php endif; ?>
                     </div>
                     <form action="dashboard.php?page=volunteer" method="POST">
@@ -151,6 +164,45 @@ function render_active_deliveries($pdo, $deliveries) {
                             </button>
                         </form>
                         <?php endforeach; ?>
+                    <?php endif; ?>
+
+                    <!-- Event History Timeline (from new delivery_events) -->
+                    <?php if (!empty($del['_events'])): ?>
+                    <div style="margin:12px 0 8px;padding:12px;background:#f8fafc;border-radius:10px;border:1px solid #e2e8f0;">
+                        <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px;">
+                            <i class="fa-solid fa-clock-rotate-left" style="color:#059669;font-size:12px;"></i>
+                            <span style="font-size:12px;font-weight:700;color:#0f172a;">Activity Timeline</span>
+                        </div>
+                        <div style="position:relative;padding-left:20px;">
+                            <div style="position:absolute;left:6px;top:4px;bottom:4px;width:2px;background:#e2e8f0;"></div>
+                            <?php foreach ($del['_events'] as $evt): 
+                                $evtIcons = ['assigned'=>'fa-clock','accepted'=>'fa-check-circle','picked_up'=>'fa-box-open','in_transit'=>'fa-truck','delivered'=>'fa-check-double','cancelled'=>'fa-ban'];
+                                $evtColors = ['assigned'=>'#6b7280','accepted'=>'#3b82f6','picked_up'=>'#f59e0b','in_transit'=>'#8b5cf6','delivered'=>'#059669','cancelled'=>'#ef4444'];
+                                $ei = $evtIcons[$evt['to_status']] ?? 'fa-circle';
+                                $ec = $evtColors[$evt['to_status']] ?? '#6b7280';
+                            ?>
+                            <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:10px;position:relative;">
+                                <div style="width:20px;height:20px;border-radius:50%;background:<?php echo $ec; ?>;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-left:-14px;border:2px solid #fff;box-shadow:0 0 0 1px <?php echo $ec; ?>40;z-index:1;">
+                                    <i class="fa-solid <?php echo $ei; ?>" style="color:#fff;font-size:9px;"></i>
+                                </div>
+                                <div style="flex:1;min-width:0;">
+                                    <div style="font-size:12px;font-weight:600;color:#0f172a;">
+                                        <?php echo ucfirst(str_replace('_', ' ', $evt['to_status'])); ?>
+                                    </div>
+                                    <?php if (!empty($evt['notes'])): ?>
+                                        <div style="font-size:11px;color:#64748b;margin-top:1px;"><?php echo htmlspecialchars($evt['notes']); ?></div>
+                                    <?php endif; ?>
+                                    <div style="font-size:10px;color:#94a3b8;margin-top:1px;">
+                                        <?php echo date('h:i A', strtotime($evt['created_at'])); ?>
+                                        <?php if (!empty($evt['actor_name'])): ?>
+                                            — <?php echo htmlspecialchars($evt['actor_name']); ?>
+                                        <?php endif; ?>
+                                    </div>
+                                </div>
+                            </div>
+                            <?php endforeach; ?>
+                        </div>
+                    </div>
                     <?php endif; ?>
                     
                     <?php if ($canReject): ?>

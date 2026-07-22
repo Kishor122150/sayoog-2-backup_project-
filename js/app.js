@@ -276,6 +276,73 @@ const translations = {
 })();
 
 // ============================================================
+// HEADER & SIDEBAR — Premium Interactions
+// ============================================================
+(function() {
+    'use strict';
+
+    // ── Topbar User Dropdown ──
+    var userBtn = document.getElementById('topbarUserBtn');
+    var userMenu = document.getElementById('topbarUserMenu');
+
+    if (userBtn && userMenu) {
+        userBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            var isOpen = userMenu.classList.contains('show');
+            closeAllDropdowns();
+            if (!isOpen) {
+                userMenu.classList.add('show');
+                userBtn.classList.add('open');
+            }
+        });
+    }
+
+    // ── Close all topbar dropdowns on outside click ──
+    function closeAllDropdowns() {
+        if (userMenu) {
+            userMenu.classList.remove('show');
+        }
+        if (userBtn) {
+            userBtn.classList.remove('open');
+        }
+    }
+
+    document.addEventListener('click', function(e) {
+        if (userBtn && !userBtn.contains(e.target) && userMenu && !userMenu.contains(e.target)) {
+            closeAllDropdowns();
+        }
+    });
+
+    // Close on Escape key
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            closeAllDropdowns();
+        }
+    });
+
+    // ── Notification Dropdown ──
+    var notifTrigger = document.getElementById('adminNotifTrigger');
+    var notifMenu = document.getElementById('adminNotifMenu');
+    var notifDropdown = document.getElementById('adminNotifDropdown');
+
+    if (notifTrigger && notifMenu && notifDropdown) {
+        notifTrigger.addEventListener('click', function(e) {
+            e.stopPropagation();
+            var isOpen = notifMenu.classList.contains('open');
+            notifMenu.classList.toggle('open');
+            notifTrigger.classList.toggle('open');
+        });
+
+        document.addEventListener('click', function(e) {
+            if (notifDropdown && !notifDropdown.contains(e.target)) {
+                notifMenu.classList.remove('open');
+                notifTrigger.classList.remove('open');
+            }
+        });
+    }
+})();
+
+// ============================================================
 // NOTIFICATION ENHANCEMENTS (Per-notification mark as read)
 // ============================================================
 (function() {
@@ -322,6 +389,95 @@ const translations = {
     };
 })();
 
+
+// ============================================================
+// ADMIN SIDEBAR ACCORDION — Collapsible Groups + localStorage
+// ============================================================
+(function() {
+    'use strict';
+
+    var SIDEBAR_KEY = 'sayog_admin_sidebar_expanded';
+
+    function initSidebarAccordion() {
+        var nav = document.getElementById('sidebarNav');
+        if (!nav) return;
+
+        var groups = nav.querySelectorAll('.nav-group');
+        if (!groups.length) return;
+
+        // Load saved expanded state
+        var saved = {};
+        try {
+            saved = JSON.parse(localStorage.getItem(SIDEBAR_KEY)) || {};
+        } catch(e) { saved = {}; }
+
+        groups.forEach(function(group) {
+            var toggle = group.querySelector('.nav-group-toggle');
+            var content = group.querySelector('.nav-group-content');
+            var groupKey = group.getAttribute('data-group');
+            if (!toggle || !content) return;
+
+            // Auto-expand if current page is in this group
+            var autoExpand = toggle.getAttribute('data-auto-expand') === 'true';
+            var isSaved = saved[groupKey] === true;
+            var shouldExpand = isSaved || autoExpand;
+
+            if (shouldExpand) {
+                toggle.setAttribute('aria-expanded', 'true');
+                content.style.maxHeight = content.scrollHeight + 'px';
+                // Save auto-expanded state
+                if (autoExpand && !isSaved) {
+                    saved[groupKey] = true;
+                }
+            }
+
+            toggle.addEventListener('click', function(e) {
+                e.preventDefault();
+                var expanded = toggle.getAttribute('aria-expanded') === 'true';
+                var isNowExpanded = !expanded;
+
+                toggle.setAttribute('aria-expanded', isNowExpanded ? 'true' : 'false');
+
+                if (isNowExpanded) {
+                    content.style.maxHeight = content.scrollHeight + 'px';
+                } else {
+                    content.style.maxHeight = '0';
+                }
+
+                // Persist state
+                saved[groupKey] = isNowExpanded;
+                try {
+                    localStorage.setItem(SIDEBAR_KEY, JSON.stringify(saved));
+                } catch(e) {}
+            });
+        });
+
+        // Sidebar toggle (mobile off-canvas)
+        var sidebar = document.getElementById('adminSidebar');
+        var toggleBtn = document.getElementById('menuToggle');
+        var overlay = document.getElementById('sidebarOverlay');
+
+        if (toggleBtn && sidebar) {
+            toggleBtn.addEventListener('click', function() {
+                sidebar.classList.toggle('active');
+                if (overlay) overlay.classList.toggle('active');
+            });
+        }
+
+        if (overlay) {
+            overlay.addEventListener('click', function() {
+                sidebar.classList.remove('active');
+                overlay.classList.remove('active');
+            });
+        }
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initSidebarAccordion);
+    } else {
+        initSidebarAccordion();
+    }
+})();
 
 // ============================================================
 // INTERACTIVE NEPAL MAP — Leaflet + MarkerCluster + City Search
